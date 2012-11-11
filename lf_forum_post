@@ -1,0 +1,134 @@
+#!/bin/bash
+echo `date` >> /var/log/lqfb/notification.log
+area=`awk 'NR==1' /tmp/lqfb_notification.txt`
+case $area in
+"1")
+   fid=8;;
+"2")
+   fid=13;;
+"3")
+   fid=17;;
+"4")
+   fid=10;;
+"5")
+   fid=14;;
+"6")
+   fid=18;;
+"7")
+   fid=7;;
+"8")
+   fid=16;;
+"9")
+   fid=11;;
+"10")
+   fid=12;;
+"11")
+   fid=9;;
+"12")
+   fid=15;;
+"13")
+   fid=43;;
+"14")
+   fid=44;;
+"15")
+   fid=45;;
+"16")
+   fid=46;;
+"17")
+   fid=47;;
+"21")
+   fid=48;;
+"22")
+   fid=48;;
+"20")
+   fid=49;;
+"19")
+   fid=50;;
+"18")
+   fid=51;;
+"23")
+   fid=70;;
+"24")
+   fid=45;;
+"25")
+   fid=45;;
+"26")
+   fid=45;;
+"27")
+   fid=45;;
+"28")
+   fid=45;;
+"29")
+   fid=47;;
+"30")
+   fid=47;;
+"31")
+   fid=51;;
+"32")
+   fid=78;;
+*)
+   echo "Unknown area id: $area" >> /var/log/lqfb/notification.log
+   exit -2
+esac
+ltid=`awk 'NR==2' /tmp/lqfb_notification.txt`
+
+newline=`zsh -c echo "\\n"`
+subject=`awk 'NR==3' /tmp/lqfb_notification.txt`
+data=`awk 'NR>3' /tmp/lqfb_notification.txt | sed "s/^ *//;s/ *$//;s/ \{1,\}/ /g"`
+
+data=${data//<p>/$newline}
+data=${data//<\/p>/$newline}
+data=${data//<a href=\"/[url=}
+data=${data//\">/]}
+data=${data//<\/a>/[\/url]}
+data=${data//<br\/>/$newline}
+data=${data//<br \/>/$newline}
+data=${data//&nbsp;/ }
+data=${data//&quot;/\"}
+data=${data//\[spoiler\]\[\/spoiler\]/}
+data=${data//</[}
+data=${data//>/]}
+data=${data//\'/\\\'}
+data=${data//$/\\$}
+
+subject=${subject//&nbsp;/ }
+subject=${subject//&quot;/\"}
+subject=${subject//</[}
+subject=${subject//>/]}
+subject=${subject//\'/\\\'}
+subject=${subject//$/\\$}
+
+if [ ${#data} -lt 5 ]; then
+  data="Leider ist ein Fehler aufgetreten. Ich teile euch immerhin trotzdem mit, dass etwas passiert ist! ;)"
+fi
+data=`echo "<?php echo urlencode('$data'); ?>" | php5-cgi -q`
+
+tid=`echo "SELECT forum FROM map WHERE lqfb=$ltid LIMIT 1;" | psql -AqSt lfbot`
+
+password=`awk 'NR==1' /opt/liquid_feedback_core/forum_password.txt`
+curl --ssl -H "Expect:" -d "action=do_login&username=LiquidFeedback&password=$password" "https://forum.piratenpartei.at/member.php" -c /tmp/forum_cookies.txt 2>/dev/null
+if ( [ "${#tid}" -gt 0 ] && [ "$tid" -gt 0 ] ); then
+  constants=`curl --ssl --no-progress-bar -b /tmp/forum_cookies.txt -c /tmp/forum_cookies.txt "https://forum.piratenpartei.at/newreply.php?tid=$tid" 2>/dev/null | grep -E "name=\"(my_post_key|posthash)"`
+  my_post_key=`echo $constants | grep -E "name=\"my_post_key\" value=\"\w+\"" -o`
+  my_post_key=${my_post_key:(26):(32)}
+  posthash=`echo $constants | grep -E "name=\"posthash\" value=\"\w+\"" -o`
+  posthash=${posthash:(23):(32)}
+  subject="RE: ${subject:(0):(81)}"
+  subject=`echo "<?php echo urlencode('$subject'); ?>" | php5-cgi -q`
+  curl --ssl -H "Expect:" -b /tmp/forum_cookies.txt -d "my_post_key=$my_post_key&subject=$subject&message=$data&submit=Antwort absenden&action=do_newreply&posthash=$posthash&tid=$tid" "https://forum.piratenpartei.at/newreply.php?tid=$tid&processed=1"
+else
+  constants=`curl --ssl --no-progress-bar -b /tmp/forum_cookies.txt -c /tmp/forum_cookies.txt "https://forum.piratenpartei.at/newthread.php?fid=$fid" 2>/dev/null | grep -E "name=\"(my_post_key|posthash)"`
+  my_post_key=`echo $constants | grep -E "name=\"my_post_key\" value=\"\w+\"" -o`
+  my_post_key=${my_post_key:(26):(32)}
+  posthash=`echo $constants | grep -E "name=\"posthash\" value=\"\w+\"" -o`
+  posthash=${posthash:(23):(32)}
+  subject="${subject:(0):(81)}"
+  subject=`echo "<?php echo urlencode('$subject'); ?>" | php5-cgi -q`
+  curl --ssl -H "Expect:" -vs -b /tmp/forum_cookies.txt -d "my_post_key=$my_post_key&subject=$subject&message=$data&submit=Thema absenden&action=do_newthread&posthash=$posthash&tid=" "https://forum.piratenpartei.at/newthread.php?fid=$fid&processed=1" 2>/tmp/forum_request.txt
+  tid=`grep Location: /tmp/forum_request.txt | grep -o -E "tid=[0-9]+" | grep -o -E "[0-9]+"`
+  if ( [ "${#tid}" -gt 0 ] && [ "$tid" -gt 0 ] ); then
+    echo "INSERT INTO map (lqfb,forum) VALUES ($ltid,$tid);" | psql -AqSt lfbot
+  fi
+fi
+rm -f /tmp/forum_cookies.txt /tmp/forum_request.txt
+

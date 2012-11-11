@@ -1,0 +1,5 @@
+#!/bin/bash
+
+date >> /var/log/lqfb/mainlog
+php-cgi /opt/liquid_feedback_core/getaccounts.php >> /var/log/lqfb/mainlog
+

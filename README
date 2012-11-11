@@ -28,10 +28,6 @@ To create an export file, which is containing all but private data,
 you may use the lf_export shell-script:
 $ lf_export liquid_feedback export.sql.gz
 
-Refer to source code of function "delete_private_data"() to see,
-which data gets deleted. If you need a different behaviour, please
-copy the function and modify the lf_export shell script accordingly.
-
 To uninstall the software, delete the lf_update binary
 and drop the database by entering the following command:
 $ dropdb liquid_feedback
