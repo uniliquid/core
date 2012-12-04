@@ -66,6 +66,8 @@ case $area in
    fid=51;;
 "32")
    fid=78;;
+"33")
+   fid=53;;
 *)
    echo "Unknown area id: $area" >> /var/log/lqfb/notification.log
    exit -2

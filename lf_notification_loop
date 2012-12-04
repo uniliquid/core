@@ -12,7 +12,7 @@ echo "${PID}" > "${PIDFILE}"
 
 while true; do
   cd /opt/liquid_feedback_frontend/
-  echo "Event:send_notifications_loop()" | su www-data -c "../webmcp/bin/webmcp_shell myconfig" >> /var/log/lqfb/notification.log
+  echo "Event:send_notifications_loop()" | su www-data -c "../webmcp/bin/webmcp_shell myconfig >> /var/log/lqfb/notification.log"
   date >> /var/log/lqfb/notification.log
   echo "Event:send_notifications_loop() terminated." >> /var/log/lqfb/notification.log
   sleep 120

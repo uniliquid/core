@@ -18,12 +18,8 @@ $query = 'CREATE TABLE member_update_copy AS SELECT * FROM member';
 $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
 pg_free_result($result);
 
-function updateUnits($lqfb_id, $lo_num, $akk)
+function updateUnits($lqfb_id, $lo_num, $min, $max, $akk)
 {
-  if ($akk == false && $lo_num == 4)
-  {
-    //$lo_num = 0;
-  }
   // ======================= set units =========================
   // --------> pirate party austria
   $query = "SELECT * FROM privilege WHERE member_id = '$lqfb_id' AND unit_id = 1;";
@@ -41,10 +37,10 @@ function updateUnits($lqfb_id, $lo_num, $akk)
   pg_free_result($result);
   // ---------> suborganisation
   // remove from old suborganisation if exists
-  $query = "SELECT * FROM privilege WHERE member_id = '$lqfb_id' AND unit_id != 1 AND unit_id != $lo_num;";
+  $query = "SELECT * FROM privilege WHERE member_id = '$lqfb_id' AND unit_id >= $min AND unit_id <= $max AND unit_id != $lo_num;";
   $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
   if ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
-    $query = "DELETE FROM privilege WHERE member_id = '$lqfb_id' AND unit_id != 1;";
+    $query = "DELETE FROM privilege WHERE member_id = '$lqfb_id' AND unit_id >= $min AND unit_id <= $max AND unit_id != $lo_num;";
     echo $query . "\n";
     $result2 = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
     pg_free_result($result2);
@@ -82,7 +78,8 @@ foreach ($lines as $line)
   $mail = filter_var($mail_original, FILTER_SANITIZE_EMAIL);
   if (!filter_var($mail, FILTER_VALIDATE_EMAIL)/* || $mail == "mitglied@piratenpartei.at"*/) { /*echo "FATAL: email address invalid: '$mail':\n"; print_r($values);*/ continue; }
   $lo = $values[3];
-  $akk = ($values[4] != null);
+  $oo = $values[4];
+  $akk = ($values[5] != null);
   if (!$akk)
     continue;
   switch ($lo)
@@ -98,7 +95,12 @@ foreach ($lines as $line)
     case 37: $lo_num = 2; break;
     default: $lo_num = 0; break;
   }
-  //echo "insert: identification=$idc, email=$mail, lo=$lo_num, akk=$akk\n";
+  switch ($oo)
+  {
+    case 90: $oo_num = 11; break;
+    default: $oo_num = 0; break;
+  }
+  //echo "insert: identification=$idc, email=$mail, lo=$lo_num, oo=$oo_num, akk=$akk\n";
   $query = "SELECT id,notify_email FROM member WHERE identification='$idc'";
   $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
   if ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
@@ -181,7 +183,8 @@ foreach ($lines as $line)
     echo "Sent invitation to $lqfb_id\n";
     exec("./sendinvitation.sh $lqfb_id");
   }
-  updateUnits($lqfb_id, $lo_num, $akk);
+  updateUnits($lqfb_id, $lo_num, 2, 10, $akk);
+  updateUnits($lqfb_id, $oo_num, 11, 11, $akk);
 }
 
 $query = "SELECT id,identification,notify_email FROM member_update_copy WHERE locked != true";
