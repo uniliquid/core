@@ -1,0 +1,3 @@
+#/bin/bash
+echo "Auto Freezing etc.!"
+psql liquid_feedback < /opt/liquid_feedback_core/auto_freeze.sql
