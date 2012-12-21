@@ -1,12 +1,33 @@
-UPDATE issue SET discussion_time = (SELECT next_time FROM auto_freeze WHERE id = 3) - accepted - (SELECT verification_time + voting_time FROM policy WHERE id = policy_id) WHERE (SELECT next_time FROM auto_freeze WHERE id = 3) IS NOT NULL AND (SELECT next_time FROM auto_freeze WHERE id = 3) > NOW() AND state = 'discussion' AND (SELECT unit_id FROM area WHERE id = area_id) = 1 AND (SELECT name FROM policy WHERE id = policy_id) LIKE '%zur Mitgliederversammlung%' AND discussion_time != (SELECT next_time FROM auto_freeze WHERE id = 3) - accepted - (SELECT verification_time + voting_time FROM policy WHERE id = policy_id);
-UPDATE issue SET verification_time = (SELECT next_time FROM auto_freeze WHERE id = 3) - half_frozen - (SELECT voting_time FROM policy WHERE id = policy_id) WHERE (SELECT next_time FROM auto_freeze WHERE id = 3) IS NOT NULL AND (SELECT next_time FROM auto_freeze WHERE id = 3) > NOW() AND state = 'verification' AND (SELECT unit_id FROM area WHERE id = area_id) = 1 AND (SELECT name FROM policy WHERE id = policy_id) LIKE '%zur Mitgliederversammlung%' AND verification_time != (SELECT next_time FROM auto_freeze WHERE id = 3) - half_frozen - (SELECT voting_time FROM policy WHERE id = policy_id);
-UPDATE issue SET voting_time = (SELECT next_time FROM auto_freeze WHERE id = 3) - fully_frozen WHERE (SELECT next_time FROM auto_freeze WHERE id = 3) IS NOT NULL AND (SELECT next_time FROM auto_freeze WHERE id = 3) > NOW() AND state = 'voting' AND (SELECT unit_id FROM area WHERE id = area_id) = 1 AND (SELECT name FROM policy WHERE id = policy_id) LIKE '%zur Mitgliederversammlung%' AND voting_time != (SELECT next_time FROM auto_freeze WHERE id = 3) - fully_frozen;
+-- BGV
+UPDATE issue
+SET discussion_time = (SELECT next_time FROM auto_freeze WHERE id = 3) - accepted - (SELECT CASE WHEN state = 'discussion' THEN verification_time + voting_time WHEN state = 'verification' THEN voting_time ELSE '00:00:00' END FROM policy WHERE id = policy_id)
+WHERE (SELECT next_time FROM auto_freeze WHERE id = 3) IS NOT NULL
+AND (SELECT next_time FROM auto_freeze WHERE id = 3) > NOW()
+AND (state = 'discussion' OR state = 'verification' OR state = 'voting')
+AND (SELECT unit_id FROM area WHERE id = area_id) = 1
+AND (SELECT name FROM policy WHERE id = policy_id) LIKE '%zur Mitgliederversammlung%'
+AND discussion_time != (SELECT next_time FROM auto_freeze WHERE id = 3) - accepted - (SELECT CASE WHEN state = 'discussion' THEN verification_time + voting_time WHEN state = 'verification' THEN voting_time ELSE '00:00:00' END FROM policy WHERE id = policy_id)
+AND (SELECT next_time FROM auto_freeze WHERE id = 3) - accepted - (SELECT CASE WHEN state = 'discussion' THEN verification_time + voting_time WHEN state = 'verification' THEN voting_time ELSE '00:00:00' END FROM policy WHERE id = policy_id) > '-00:05:00';
 
-UPDATE issue SET discussion_time = (SELECT next_time FROM auto_freeze WHERE id = 2) - accepted - (SELECT verification_time + voting_time FROM policy WHERE id = policy_id) WHERE (SELECT next_time FROM auto_freeze WHERE id = 2) IS NOT NULL AND (SELECT next_time FROM auto_freeze WHERE id = 2) > NOW() AND state = 'discussion' AND area_id = 6 AND policy_id = 41 AND discussion_time != (SELECT next_time FROM auto_freeze WHERE id = 2) - accepted - (SELECT verification_time + voting_time FROM policy WHERE id = policy_id);
-UPDATE issue SET verification_time = (SELECT next_time FROM auto_freeze WHERE id = 2) - half_frozen - (SELECT voting_time FROM policy WHERE id = policy_id) WHERE (SELECT next_time FROM auto_freeze WHERE id = 2) IS NOT NULL AND (SELECT next_time FROM auto_freeze WHERE id = 2) > NOW() AND state = 'verification' AND area_id = 6 AND policy_id = 41 AND verification_time != (SELECT next_time FROM auto_freeze WHERE id = 2) - half_frozen - (SELECT voting_time FROM policy WHERE id = policy_id);
-UPDATE issue SET voting_time = (SELECT next_time FROM auto_freeze WHERE id = 2) - fully_frozen WHERE (SELECT next_time FROM auto_freeze WHERE id = 2) IS NOT NULL AND (SELECT next_time FROM auto_freeze WHERE id = 2) > NOW() AND state = 'voting' AND area_id = 6 AND policy_id = 41 AND voting_time != (SELECT next_time FROM auto_freeze WHERE id = 2) - fully_frozen;
+-- BGF
+UPDATE issue
+SET discussion_time = (SELECT next_time FROM auto_freeze WHERE id = 2) - accepted - (SELECT CASE WHEN state = 'discussion' THEN verification_time + voting_time WHEN state = 'verification' THEN voting_time ELSE '00:00:00' END FROM policy WHERE id = policy_id)
+WHERE (SELECT next_time FROM auto_freeze WHERE id = 2) IS NOT NULL
+AND (SELECT next_time FROM auto_freeze WHERE id = 2) > NOW()
+AND (state = 'discussion' OR state = 'verification' OR state = 'voting')
+AND area_id = 6
+AND policy_id = 41
+AND discussion_time != (SELECT next_time FROM auto_freeze WHERE id = 2) - accepted - (SELECT CASE WHEN state = 'discussion' THEN verification_time + voting_time WHEN state = 'verification' THEN voting_time ELSE '00:00:00' END FROM policy WHERE id = policy_id)
+AND (SELECT next_time FROM auto_freeze WHERE id = 2) - accepted - (SELECT CASE WHEN state = 'discussion' THEN verification_time + voting_time WHEN state = 'verification' THEN voting_time ELSE '00:00:00' END FROM policy WHERE id = policy_id) > '-00:05:00';
 
-UPDATE issue SET discussion_time = (SELECT next_time FROM auto_freeze WHERE id = 1) - accepted - (SELECT verification_time + voting_time FROM policy WHERE id = policy_id) WHERE (SELECT next_time FROM auto_freeze WHERE id = 1) IS NOT NULL AND (SELECT next_time FROM auto_freeze WHERE id = 1) > NOW() AND state = 'discussion' AND area_id = 6 AND policy_id = 40 AND discussion_time != (SELECT next_time FROM auto_freeze WHERE id = 1) - accepted - (SELECT verification_time + voting_time FROM policy WHERE id = policy_id);
-UPDATE issue SET verification_time = (SELECT next_time FROM auto_freeze WHERE id = 1) - half_frozen - (SELECT voting_time FROM policy WHERE id = policy_id) WHERE (SELECT next_time FROM auto_freeze WHERE id = 1) IS NOT NULL AND (SELECT next_time FROM auto_freeze WHERE id = 1) > NOW() AND state = 'verification' AND area_id = 6 AND policy_id = 40 AND verification_time != (SELECT next_time FROM auto_freeze WHERE id = 1) - half_frozen - (SELECT voting_time FROM policy WHERE id = policy_id);
-UPDATE issue SET voting_time = (SELECT next_time FROM auto_freeze WHERE id = 1) - fully_frozen WHERE (SELECT next_time FROM auto_freeze WHERE id = 1) IS NOT NULL AND (SELECT next_time FROM auto_freeze WHERE id = 1) > NOW() AND state = 'voting' AND area_id = 6 AND policy_id = 40 AND voting_time != (SELECT next_time FROM auto_freeze WHERE id = 1) - fully_frozen;
+-- BV
+UPDATE issue
+SET discussion_time = (SELECT next_time FROM auto_freeze WHERE id = 1) - accepted - (SELECT CASE WHEN state = 'discussion' THEN verification_time + voting_time WHEN state = 'verification' THEN voting_time ELSE '00:00:00' END FROM policy WHERE id = policy_id)
+WHERE (SELECT next_time FROM auto_freeze WHERE id = 1) IS NOT NULL
+AND (SELECT next_time FROM auto_freeze WHERE id = 1) > NOW()
+AND (state = 'discussion' OR state = 'verification' OR state = 'voting')
+AND area_id = 6
+AND policy_id = 40
+AND discussion_time != (SELECT next_time FROM auto_freeze WHERE id = 1) - accepted - (SELECT CASE WHEN state = 'discussion' THEN verification_time + voting_time WHEN state = 'verification' THEN voting_time ELSE '00:00:00' END FROM policy WHERE id = policy_id)
+AND (SELECT next_time FROM auto_freeze WHERE id = 1) - accepted - (SELECT CASE WHEN state = 'discussion' THEN verification_time + voting_time WHEN state = 'verification' THEN voting_time ELSE '00:00:00' END FROM policy WHERE id = policy_id) > '-00:05:00';
 
