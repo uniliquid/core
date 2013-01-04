@@ -2188,7 +2188,8 @@ CREATE VIEW "event_seen_by_member" AS
   LEFT JOIN "ignored_initiative"
     ON "member"."id" = "ignored_initiative"."member_id"
     AND "event"."initiative_id" = "ignored_initiative"."initiative_id"
-  WHERE (
+  WHERE
+    now() - "event"."occurrence" BETWEEN '-3 days'::interval AND '3 days'::interval AND (
     "supporter"."member_id" NOTNULL OR
     "interest"."member_id" NOTNULL OR
     ( "membership"."member_id" NOTNULL AND
