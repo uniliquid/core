@@ -1,4 +1,5 @@
 #!/bin/bash
+echo "forum post" >> /var/log/lqfb/notification.log
 echo `date` >> /var/log/lqfb/notification.log
 area=`awk 'NR==1' /tmp/lqfb_notification.txt`
 case $area in
@@ -133,4 +134,4 @@ else
   fi
 fi
 rm -f /tmp/forum_cookies.txt /tmp/forum_request.txt
-
+echo "forum post done" >> /var/log/lqfb/notification.log
