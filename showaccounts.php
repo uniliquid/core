@@ -21,7 +21,8 @@ foreach ($lines as $line)
   $lo = $values[3];
   $oo = $values[4];
   $akk = ($values[5] != null);
-  if (!$akk)
+  $paid = ($values[6] != null);
+  if (!$akk || !$paid)
     continue;
   switch ($lo)
   {
@@ -41,7 +42,7 @@ foreach ($lines as $line)
     case 90: $oo_num = 11; break;
     default: $oo_num = 0; break;
   }
-  echo "insert: identification=$idc, email=$mail, lo=$lo_num, oo=$oo_num, akk=$akk\n";
+  echo "insert: identification=$idc, email=$mail, lo=$lo_num, oo=$oo_num, akk=$akk, paid=$paid\n";
 }
 
 ?>
