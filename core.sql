@@ -45,7 +45,7 @@ CREATE FUNCTION "highlight"
 COMMENT ON FUNCTION "highlight"
   ( "body_p"       TEXT,
     "query_text_p" TEXT )
-  IS 'For a given a user query this function encapsulates all matches with asterisks. Asterisks and backslashes being already present are preceeded with one extra backslash.';
+  IS 'For a given user query this function encapsulates all matches with asterisks. Asterisks and backslashes being already present are preceeded with one extra backslash.';
 
 
 
@@ -79,9 +79,9 @@ COMMENT ON COLUMN "contingent"."initiative_limit" IS 'Number of new initiatives 
 
 
 CREATE TYPE "notify_level" AS ENUM
-  ('none', 'voting', 'verification', 'discussion', 'all');
+  ('expert', 'none', 'voting', 'verification', 'discussion', 'all');
 
-COMMENT ON TYPE "notify_level" IS 'Level of notification: ''none'' = no notifications, ''voting'' = notifications about finished issues and issues in voting, ''verification'' = notifications about finished issues, issues in voting and verification phase, ''discussion'' = notifications about everything except issues in admission phase, ''all'' = notifications about everything';
+COMMENT ON TYPE "notify_level" IS 'Level of notification: ''expert'' = detailed settings in table ''notify'', ''none'' = no notifications, ''voting'' = notifications about finished issues and issues in voting, ''verification'' = notifications about finished issues, issues in voting and verification phase, ''discussion'' = notifications about everything except issues in admission phase, ''all'' = notifications about everything';
 
 
 CREATE TABLE "member" (
@@ -173,7 +173,42 @@ COMMENT ON COLUMN "member"."formatting_engine"    IS 'Allows different formattin
 COMMENT ON COLUMN "member"."statement"            IS 'Freely chosen text of the member for his/her profile';
 
 
--- DEPRECATED API TABLES --
+CREATE TYPE "notify_interest" AS ENUM
+  ('all', 'my_units', 'my_areas', 'interested', 'potentially', 'supported', 'initiated', 'voted');
+
+
+CREATE TABLE "notify" (
+        "member_id"                                          INT4    NOT NULL REFERENCES "member" ("id")
+                                                             ON DELETE CASCADE ON UPDATE CASCADE,
+        "interest"                                           "notify_interest" NOT NULL,
+        "initiative_created_in_new_issue"                    BOOLEAN NOT NULL DEFAULT FALSE,
+        "admission__initiative_created_in_existing_issue"    BOOLEAN NOT NULL DEFAULT FALSE,
+        "admission__new_draft_created"                       BOOLEAN NOT NULL DEFAULT FALSE,
+        "admission__suggestion_created"                      BOOLEAN NOT NULL DEFAULT FALSE,
+        "admission__initiative_revoked"                      BOOLEAN NOT NULL DEFAULT FALSE,
+        "canceled_revoked_before_accepted"                   BOOLEAN NOT NULL DEFAULT FALSE,
+        "canceled_issue_not_accepted"                        BOOLEAN NOT NULL DEFAULT FALSE,
+        "discussion"                                         BOOLEAN NOT NULL DEFAULT FALSE,
+        "discussion__initiative_created_in_existing_issue"   BOOLEAN NOT NULL DEFAULT FALSE,
+        "discussion__new_draft_created"                      BOOLEAN NOT NULL DEFAULT FALSE,
+        "discussion__suggestion_created"                     BOOLEAN NOT NULL DEFAULT FALSE,
+        "discussion__argument_created"                       BOOLEAN NOT NULL DEFAULT FALSE,
+        "discussion__initiative_revoked"                     BOOLEAN NOT NULL DEFAULT FALSE,
+        "canceled_after_revocation_during_discussion"        BOOLEAN NOT NULL DEFAULT FALSE,
+        "verification"                                       BOOLEAN NOT NULL DEFAULT FALSE,
+        "verification__initiative_created_in_existing_issue" BOOLEAN NOT NULL DEFAULT FALSE,
+        "verification__argument_created"                     BOOLEAN NOT NULL DEFAULT FALSE,
+        "verification__initiative_revoked"                   BOOLEAN NOT NULL DEFAULT FALSE,
+        "canceled_after_revocation_during_verification"      BOOLEAN NOT NULL DEFAULT FALSE,
+        "canceled_no_initiative_admitted"                    BOOLEAN NOT NULL DEFAULT FALSE,
+        "voting"                                             BOOLEAN NOT NULL DEFAULT FALSE,
+        "finished_with_winner"                               BOOLEAN NOT NULL DEFAULT FALSE,
+        "finished_without_winner"                            BOOLEAN NOT NULL DEFAULT FALSE );
+CREATE UNIQUE INDEX notify_member_interest ON notify USING btree (member_id, interest);
+
+COMMENT ON TABLE "notify" IS 'Member settings in export mode which notifications are to be sent; No entry if the member does not use the expert mode';
+
+-- DEPRECARED API TABLES --
 
 CREATE TYPE "application_access_level" AS ENUM
   ('member', 'full', 'pseudonymous', 'anonymous');
@@ -518,6 +553,7 @@ CREATE TABLE "issue" (
         "latest_snapshot_event" "snapshot_event",
         "population"            INT4,
         "voter_count"           INT4,
+        "direct_voter_count"    INT4,
         "status_quo_schulze_rank" INT4,
         CONSTRAINT "admission_time_not_null_unless_instantly_accepted" CHECK (
           "admission_time" NOTNULL OR ("accepted" NOTNULL AND "accepted" = "created") ),
@@ -583,6 +619,7 @@ COMMENT ON COLUMN "issue"."snapshot"                IS 'Point in time, when snap
 COMMENT ON COLUMN "issue"."latest_snapshot_event"   IS 'Event type of latest snapshot for issue; Can be used to select the latest snapshot data in the snapshot tables';
 COMMENT ON COLUMN "issue"."population"              IS 'Sum of "weight" column in table "direct_population_snapshot"';
 COMMENT ON COLUMN "issue"."voter_count"             IS 'Total number of direct and delegating voters; This value is related to the final voting, while "population" is related to snapshots before the final voting';
+COMMENT ON COLUMN "issue"."voter_count"             IS 'Total number of direct voters';
 COMMENT ON COLUMN "issue"."status_quo_schulze_rank" IS 'Schulze rank of status quo, as calculated by "calculate_ranks" function';
 
 
@@ -614,6 +651,8 @@ CREATE TABLE "initiative" (
         "satisfied_informed_supporter_count" INT4,
         "positive_votes"        INT4,
         "negative_votes"        INT4,
+        "positive_direct_votes" INT4,
+        "negative_direct_votes" INT4,
         "direct_majority"       BOOLEAN,
         "indirect_majority"     BOOLEAN,
         "schulze_rank"          INT4,
@@ -634,6 +673,7 @@ CREATE TABLE "initiative" (
         CONSTRAINT "non_admitted_initiatives_cant_contain_voting_results" CHECK (
           ( "admitted" NOTNULL AND "admitted" = TRUE ) OR
           ( "positive_votes" ISNULL AND "negative_votes" ISNULL AND
+            "positive_direct_votes" ISNULL AND "negative_direct_votes" ISNULL AND
             "direct_majority" ISNULL AND "indirect_majority" ISNULL AND
             "schulze_rank" ISNULL AND
             "better_than_status_quo" ISNULL AND "worse_than_status_quo" ISNULL AND
@@ -669,6 +709,8 @@ COMMENT ON COLUMN "initiative"."satisfied_supporter_count"          IS 'Calculat
 COMMENT ON COLUMN "initiative"."satisfied_informed_supporter_count" IS 'Calculated from table "direct_supporter_snapshot"';
 COMMENT ON COLUMN "initiative"."positive_votes"         IS 'Calculated from table "direct_voter"';
 COMMENT ON COLUMN "initiative"."negative_votes"         IS 'Calculated from table "direct_voter"';
+COMMENT ON COLUMN "initiative"."positive_direct_votes"  IS 'Calculated from table "direct_voter"';
+COMMENT ON COLUMN "initiative"."negative_direct_votes"  IS 'Calculated from table "direct_voter"';
 COMMENT ON COLUMN "initiative"."direct_majority"        IS 'TRUE, if "positive_votes"/("positive_votes"+"negative_votes") is strictly greater or greater-equal than "direct_majority_num"/"direct_majority_den", and "positive_votes" is greater-equal than "direct_majority_positive", and ("positive_votes"+abstentions) is greater-equal than "direct_majority_non_negative"';
 COMMENT ON COLUMN "initiative"."indirect_majority"      IS 'Same as "direct_majority", but also considering indirect beat paths';
 COMMENT ON COLUMN "initiative"."schulze_rank"           IS 'Schulze-Ranking without tie-breaking';
@@ -688,6 +730,7 @@ CREATE TABLE "battle" (
         "losing_initiative_id"  INT4,
         FOREIGN KEY ("issue_id", "losing_initiative_id") REFERENCES "initiative" ("issue_id", "id") ON DELETE CASCADE ON UPDATE CASCADE,
         "count"                 INT4            NOT NULL,
+        "direct_count"          INT4, -- allow NULL for compatibility with existing records
         CONSTRAINT "initiative_ids_not_equal" CHECK (
           "winning_initiative_id" != "losing_initiative_id" OR
           ( ("winning_initiative_id" NOTNULL AND "losing_initiative_id" ISNULL) OR
@@ -798,7 +841,7 @@ CREATE TABLE "rendered_suggestion" (
         "format"                TEXT,
         "content"               TEXT            NOT NULL );
 
-COMMENT ON TABLE "rendered_suggestion" IS 'This table may be used by frontends to cache "rendered" drafts (e.g. HTML output generated from wiki text)';
+COMMENT ON TABLE "rendered_suggestion" IS 'This table may be used by frontends to cache "rendered" suggestions (e.g. HTML output generated from wiki text)';
 
 
 CREATE TABLE "suggestion_setting" (
@@ -810,6 +853,45 @@ CREATE TABLE "suggestion_setting" (
 
 COMMENT ON TABLE "suggestion_setting" IS 'Place for frontend to store suggestion specific settings of members as strings';
 
+
+CREATE TYPE side AS ENUM ('pro', 'contra');
+
+CREATE TABLE "argument" (
+        UNIQUE ("initiative_id", "id"),  -- index needed for foreign-key on table "rating"
+        "initiative_id"         INT4            REFERENCES "initiative" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "id"                    SERIAL8         PRIMARY KEY,
+        --"parent_id"             SERIAL8,
+        "created"               TIMESTAMPTZ     NOT NULL DEFAULT now(),
+        "author_id"             INT4            REFERENCES "member" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        "name"                  TEXT            NOT NULL,
+        "formatting_engine"     TEXT,
+        "content"               TEXT            NOT NULL DEFAULT '',
+        "text_search_data"      TSVECTOR,
+        "side"                  side            NOT NULL,
+        "minus_count"           INT4            NOT NULL DEFAULT 0,
+        "plus_count"            INT4            NOT NULL DEFAULT 0 );
+CREATE INDEX "argument_created_idx" ON "argument" ("created");
+CREATE INDEX "argument_author_id_created_idx" ON "argument" ("author_id", "created");
+CREATE INDEX "argument_text_search_data_idx" ON "argument" USING gin ("text_search_data");
+CREATE TRIGGER "update_text_search_data"
+  BEFORE INSERT OR UPDATE ON "argument"
+  FOR EACH ROW EXECUTE PROCEDURE
+  tsvector_update_trigger('text_search_data', 'pg_catalog.simple',
+    "name", "content");
+
+COMMENT ON TABLE "argument" IS 'Arguments to initiatives';
+
+COMMENT ON COLUMN "argument"."minus_count" IS 'Number of negative ratings; delegations are not considered';
+COMMENT ON COLUMN "argument"."plus_count"  IS 'Number of positive ratings; delegations are not considered';
+
+
+CREATE TABLE "rendered_argument" (
+        PRIMARY KEY ("argument_id", "format"),
+        "argument_id"           INT8            NOT NULL REFERENCES "argument" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "format"                TEXT,
+        "content"               TEXT            NOT NULL );
+
+COMMENT ON TABLE "rendered_argument" IS 'This table may be used by frontends to cache "rendered" arguments (e.g. HTML output generated from wiki text)';
 
 CREATE TABLE "privilege" (
         PRIMARY KEY ("unit_id", "member_id"),
@@ -894,6 +976,19 @@ CREATE INDEX "opinion_member_id_initiative_id_idx" ON "opinion" ("member_id", "i
 COMMENT ON TABLE "opinion" IS 'Opinion on suggestions (criticism related to initiatives); Frontends must ensure that opinions are not created modified or deleted when related to fully_frozen or closed issues.';
 
 COMMENT ON COLUMN "opinion"."degree" IS '2 = fulfillment required for support; 1 = fulfillment desired; -1 = fulfillment unwanted; -2 = fulfillment cancels support';
+
+
+CREATE TABLE "rating" (
+        "issue_id"              INT4            NOT NULL,
+        "initiative_id"         INT4            NOT NULL,
+        PRIMARY KEY ("argument_id", "member_id"),
+        "argument_id"           INT8            REFERENCES "argument" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "member_id"             INT4            REFERENCES "member" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        "negative"              BOOLEAN         NOT NULL DEFAULT FALSE,
+        FOREIGN KEY ("issue_id", "member_id") REFERENCES "interest" ("issue_id", "member_id") ON DELETE CASCADE ON UPDATE CASCADE );
+CREATE INDEX "rating_member_id_argument_id_idx" ON "rating" ("member_id", "initiative_id");
+
+COMMENT ON TABLE "rating" IS 'Rating of arguments; Frontends must ensure that ratings are not created modified or deleted when related to fully_frozen or closed issues.';
 
 
 CREATE TYPE "delegation_scope" AS ENUM ('unit', 'area', 'issue');
@@ -1093,13 +1188,47 @@ COMMENT ON COLUMN "vote"."issue_id" IS 'WARNING: No index: For selections use co
 COMMENT ON COLUMN "vote"."grade"    IS 'Values smaller than zero mean reject, values greater than zero mean acceptance, zero or missing row means abstention. Preferences are expressed by different positive or negative numbers.';
 
 
+CREATE TABLE "issue_comment" (
+        PRIMARY KEY ("issue_id", "member_id"),
+        "issue_id"              INT4            REFERENCES "issue" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "member_id"             INT4            REFERENCES "member" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "changed"               TIMESTAMPTZ     NOT NULL DEFAULT now(),
+        "formatting_engine"     TEXT,
+        "content"               TEXT            NOT NULL,
+        "text_search_data"      TSVECTOR );
+CREATE INDEX "issue_comment_member_id_idx" ON "issue_comment" ("member_id");
+CREATE INDEX "issue_comment_text_search_data_idx" ON "issue_comment" USING gin ("text_search_data");
+CREATE TRIGGER "update_text_search_data"
+  BEFORE INSERT OR UPDATE ON "issue_comment"
+  FOR EACH ROW EXECUTE PROCEDURE
+  tsvector_update_trigger('text_search_data', 'pg_catalog.simple', "content");
+
+COMMENT ON TABLE "issue_comment" IS 'Place to store free comments of members related to issues';
+
+COMMENT ON COLUMN "issue_comment"."changed" IS 'Time the comment was last changed';
+
+
+CREATE TABLE "rendered_issue_comment" (
+        PRIMARY KEY ("issue_id", "member_id", "format"),
+        FOREIGN KEY ("issue_id", "member_id")
+          REFERENCES "issue_comment" ("issue_id", "member_id")
+          ON DELETE CASCADE ON UPDATE CASCADE,
+        "issue_id"              INT4,
+        "member_id"             INT4,
+        "format"                TEXT,
+        "content"               TEXT            NOT NULL );
+
+COMMENT ON TABLE "rendered_issue_comment" IS 'This table may be used by frontends to cache "rendered" issue comments (e.g. HTML output generated from wiki text)';
+
+
 CREATE TYPE "event_type" AS ENUM (
         'issue_state_changed',
         'initiative_created_in_new_issue',
         'initiative_created_in_existing_issue',
         'initiative_revoked',
         'new_draft_created',
-        'suggestion_created');
+        'suggestion_created',
+        'argument_created');
 
 COMMENT ON TYPE "event_type" IS 'Type used for column "event" of table "event"';
 
@@ -1114,6 +1243,7 @@ CREATE TABLE "event" (
         "initiative_id"         INT4,
         "draft_id"              INT8,
         "suggestion_id"         INT8,
+        "argument_id"           INT8,
         FOREIGN KEY ("issue_id", "initiative_id")
           REFERENCES "initiative" ("issue_id", "id")
           ON DELETE CASCADE ON UPDATE CASCADE,
@@ -1123,6 +1253,9 @@ CREATE TABLE "event" (
         FOREIGN KEY ("initiative_id", "suggestion_id")
           REFERENCES "suggestion" ("initiative_id", "id")
           ON DELETE CASCADE ON UPDATE CASCADE,
+        FOREIGN KEY ("initiative_id", "argument_id")
+          REFERENCES "argument" ("initiative_id", "id")
+          ON DELETE CASCADE ON UPDATE CASCADE,
         CONSTRAINT "null_constraints_for_issue_state_changed" CHECK (
           "event" != 'issue_state_changed' OR (
             "member_id"     ISNULL  AND
@@ -1130,7 +1263,8 @@ CREATE TABLE "event" (
             "state"         NOTNULL AND
             "initiative_id" ISNULL  AND
             "draft_id"      ISNULL  AND
-            "suggestion_id" ISNULL  )),
+            "suggestion_id" ISNULL  AND
+            "argument_id"   ISNULL  )),
         CONSTRAINT "null_constraints_for_initiative_creation_or_revocation_or_new_draft" CHECK (
           "event" NOT IN (
             'initiative_created_in_new_issue',
@@ -1143,7 +1277,7 @@ CREATE TABLE "event" (
             "state"         NOTNULL AND
             "initiative_id" NOTNULL AND
             "draft_id"      NOTNULL AND
-            "suggestion_id" ISNULL  )),
+            "suggestion_id" ISNULL )),
         CONSTRAINT "null_constraints_for_suggestion_creation" CHECK (
           "event" != 'suggestion_created' OR (
             "member_id"     NOTNULL AND
@@ -1151,7 +1285,15 @@ CREATE TABLE "event" (
             "state"         NOTNULL AND
             "initiative_id" NOTNULL AND
             "draft_id"      ISNULL  AND
-            "suggestion_id" NOTNULL )) );
+            "suggestion_id" NOTNULL )),
+        CONSTRAINT "null_constraints_for_argument_creation" CHECK (
+          "event" != 'argument_created' OR (
+            "member_id"     NOTNULL AND
+            "issue_id"      NOTNULL AND
+            "state"         NOTNULL AND
+            "initiative_id" NOTNULL AND
+            "draft_id"      ISNULL  AND
+            "argument_id"   NOTNULL )) );
 CREATE INDEX "event_occurrence_idx" ON "event" ("occurrence");
 
 COMMENT ON TABLE "event" IS 'Event table, automatically filled by triggers';
@@ -1338,6 +1480,38 @@ CREATE TRIGGER "write_event_suggestion_created"
 COMMENT ON FUNCTION "write_event_suggestion_created_trigger"()      IS 'Implementation of trigger "write_event_suggestion_created" on table "issue"';
 COMMENT ON TRIGGER "write_event_suggestion_created" ON "suggestion" IS 'Create entry in "event" table on suggestion creation';
 
+
+CREATE FUNCTION "write_event_argument_created_trigger"()
+  RETURNS TRIGGER
+  LANGUAGE 'plpgsql' VOLATILE AS $$
+    DECLARE
+      "initiative_row" "initiative"%ROWTYPE;
+      "issue_row"      "issue"%ROWTYPE;
+    BEGIN
+      SELECT * INTO "initiative_row" FROM "initiative"
+        WHERE "id" = NEW."initiative_id";
+      SELECT * INTO "issue_row" FROM "issue"
+        WHERE "id" = "initiative_row"."issue_id";
+      INSERT INTO "event" (
+          "event", "member_id",
+          "issue_id", "state", "initiative_id", "argument_id"
+        ) VALUES (
+          'argument_created',
+          NEW."author_id",
+          "initiative_row"."issue_id",
+          "issue_row"."state",
+          "initiative_row"."id",
+          NEW."id" );
+      RETURN NULL;
+    END;
+  $$;
+
+CREATE TRIGGER "write_event_argument_created"
+  AFTER INSERT ON "argument" FOR EACH ROW EXECUTE PROCEDURE
+  "write_event_argument_created_trigger"();
+
+COMMENT ON FUNCTION "write_event_argument_created_trigger"()      IS 'Implementation of trigger "write_event_argument_created" on table "issue"';
+COMMENT ON TRIGGER "write_event_argument_created" ON "argument" IS 'Create entry in "event" table on argument creation';
 
 
 ----------------------------
@@ -1763,9 +1937,12 @@ CREATE FUNCTION "autocreate_interest_trigger"()
 
 CREATE TRIGGER "autocreate_interest" BEFORE INSERT ON "supporter"
   FOR EACH ROW EXECUTE PROCEDURE "autocreate_interest_trigger"();
+CREATE TRIGGER "autocreate_interest_rating" BEFORE INSERT ON "rating"
+  FOR EACH ROW EXECUTE PROCEDURE "autocreate_interest_trigger"();
 
 COMMENT ON FUNCTION "autocreate_interest_trigger"()     IS 'Implementation of trigger "autocreate_interest" on table "supporter"';
 COMMENT ON TRIGGER "autocreate_interest" ON "supporter" IS 'Supporting an initiative implies interest in the issue, thus automatically creates an entry in the "interest" table';
+COMMENT ON TRIGGER "autocreate_interest_rating" ON "rating" IS 'Rating an argument implies interest in the issue, thus automatically creates an entry in the "interest" table';
 
 
 CREATE FUNCTION "autocreate_supporter_trigger"()
@@ -2041,7 +2218,13 @@ CREATE VIEW "battle_view" AS
         coalesce("better_vote"."grade", 0) >
         coalesce("worse_vote"."grade", 0)
       THEN "direct_voter"."weight" ELSE 0 END
-    ) AS "count"
+    ) AS "count",
+    sum(
+      CASE WHEN
+        coalesce("better_vote"."grade", 0) >
+        coalesce("worse_vote"."grade", 0)
+      THEN 1 ELSE 0 END
+    ) AS "direct_count"
   FROM "issue"
   LEFT JOIN "direct_voter"
   ON "issue"."id" = "direct_voter"."issue_id"
@@ -2173,6 +2356,12 @@ CREATE VIEW "event_seen_by_member" AS
   FROM "member" CROSS JOIN "event"
   LEFT JOIN "issue"
     ON "event"."issue_id" = "issue"."id"
+  LEFT JOIN "area"
+    ON "issue"."area_id" = "area"."id"
+  LEFT JOIN "privilege"
+    ON "member"."id" = "privilege"."member_id"
+    AND "privilege"."unit_id" = "area"."unit_id"
+    AND "privilege"."voting_right" = TRUE
   LEFT JOIN "membership"
     ON "member"."id" = "membership"."member_id"
     AND "issue"."area_id" = "membership"."area_id"
@@ -2182,14 +2371,46 @@ CREATE VIEW "event_seen_by_member" AS
   LEFT JOIN "supporter"
     ON "member"."id" = "supporter"."member_id"
     AND "event"."initiative_id" = "supporter"."initiative_id"
+  LEFT JOIN "critical_opinion"
+    ON "member"."id" = "critical_opinion"."member_id"
+    AND "event"."initiative_id" = "critical_opinion"."initiative_id"
+  LEFT JOIN "initiator"
+    ON "member"."id" = "initiator"."member_id"
+    AND "event"."initiative_id" = "initiator"."initiative_id"
+    AND "initiator"."accepted" = TRUE
+  LEFT JOIN "direct_voter"
+    ON "member"."id" = "direct_voter"."member_id"
+    AND "issue"."id" = "direct_voter"."issue_id"
+    AND "issue"."closed" NOTNULL
   LEFT JOIN "ignored_member"
     ON "member"."id" = "ignored_member"."member_id"
     AND "event"."member_id" = "ignored_member"."other_member_id"
   LEFT JOIN "ignored_initiative"
     ON "member"."id" = "ignored_initiative"."member_id"
     AND "event"."initiative_id" = "ignored_initiative"."initiative_id"
+  FULL JOIN "notify"
+    ON "member"."id" = "notify"."member_id"
   WHERE
     now() - "event"."occurrence" BETWEEN '-3 days'::interval AND '3 days'::interval AND (
+    -- standard mode
+    (
+      (
+        ( "member"."notify_level" >= 'all' ) OR
+        ( "member"."notify_level" >= 'voting' AND
+          "event"."state" IN (
+            'voting',
+            'finished_without_winner',
+            'finished_with_winner' ) ) OR
+        ( "member"."notify_level" >= 'verification' AND
+          "event"."state" IN (
+            'verification',
+            'canceled_after_revocation_during_verification',
+            'canceled_no_initiative_admitted' ) ) OR
+        ( "member"."notify_level" >= 'discussion' AND
+          "event"."state" IN (
+            'discussion',
+            'canceled_after_revocation_during_discussion' ) )
+      ) AND (
     "supporter"."member_id" NOTNULL OR
     "interest"."member_id" NOTNULL OR
     ( "membership"."member_id" NOTNULL AND
@@ -2197,9 +2418,77 @@ CREATE VIEW "event_seen_by_member" AS
         'issue_state_changed',
         'initiative_created_in_new_issue',
         'initiative_created_in_existing_issue',
-        'initiative_revoked' ) ) )
+            'initiative_revoked' ) )
+      )
+    )
+    -- expert mode
+    OR (
+      "member"."notify_level" = 'expert' AND (
+        "notify"."interest" = 'all' OR
+        ("notify"."interest" = 'my_units'    AND "privilege"."member_id" NOTNULL) OR
+        ("notify"."interest" = 'my_areas'    AND "membership"."member_id" NOTNULL) OR
+        ("notify"."interest" = 'interested'  AND "interest"."member_id" NOTNULL) OR
+        ("notify"."interest" = 'potentially' AND "supporter"."member_id" NOTNULL AND "critical_opinion"."member_id" NOTNULL) OR
+        ("notify"."interest" = 'supported'   AND "supporter"."member_id" NOTNULL AND "critical_opinion"."member_id" ISNULL) OR
+        ("notify"."interest" = 'initiated'   AND "initiator"."member_id" NOTNULL) OR
+        ("notify"."interest" = 'voted'       AND "direct_voter"."member_id" NOTNULL)
+      ) AND (
+        -- admission / new
+        ("notify"."initiative_created_in_new_issue" AND
+          "event"."event" = 'initiative_created_in_new_issue') OR
+        ("notify"."admission__initiative_created_in_existing_issue" AND
+          "event"."event" = 'initiative_created_in_existing_issue' AND "event"."state" = 'admission') OR
+        ("notify"."admission__new_draft_created" AND
+          "event"."event" = 'new_draft_created'                    AND "event"."state" = 'admission') OR
+        ("notify"."admission__suggestion_created" AND
+          "event"."event" = 'suggestion_created'                   AND "event"."state" = 'admission') OR
+        ("notify"."admission__initiative_revoked" AND
+          "event"."event" = 'initiative_revoked'                   AND "event"."state" = 'admission') OR
+        ("notify"."canceled_revoked_before_accepted" AND
+          "event"."event" = 'issue_state_changed' AND "event"."state" = 'canceled_revoked_before_accepted') OR
+        ("notify"."canceled_issue_not_accepted" AND
+          "event"."event" = 'issue_state_changed' AND "event"."state" = 'canceled_issue_not_accepted') OR
+        -- discussion
+        ("notify"."discussion" AND
+          "event"."event" = 'issue_state_changed'                  AND "event"."state" = 'discussion') OR
+        ("notify"."discussion__initiative_created_in_existing_issue" AND
+          "event"."event" = 'initiative_created_in_existing_issue' AND "event"."state" = 'discussion') OR
+        ("notify"."discussion__new_draft_created" AND
+          "event"."event" = 'new_draft_created'                    AND "event"."state" = 'discussion') OR
+        ("notify"."discussion__suggestion_created" AND
+          "event"."event" = 'suggestion_created'                   AND "event"."state" = 'discussion') OR
+        ("notify"."discussion__argument_created" AND
+          "event"."event" = 'argument_created'                     AND "event"."state" = 'discussion') OR
+        ("notify"."discussion__initiative_revoked" AND
+          "event"."event" = 'initiative_revoked'                   AND "event"."state" = 'discussion') OR
+        ("notify"."canceled_after_revocation_during_discussion" AND
+          "event"."event" = 'issue_state_changed' AND "event"."state" = 'canceled_after_revocation_during_discussion') OR
+        -- verification
+        ("notify"."verification" AND
+          "event"."event" = 'issue_state_changed'                  AND "event"."state" = 'verification') OR
+        ("notify"."verification__initiative_created_in_existing_issue" AND
+          "event"."event" = 'initiative_created_in_existing_issue' AND "event"."state" = 'verification') OR
+        ("notify"."discussion__argument_created" AND
+          "event"."event" = 'argument_created'                     AND "event"."state" = 'verification') OR
+        ("notify"."verification__initiative_revoked" AND
+          "event"."event" = 'initiative_revoked'                   AND "event"."state" = 'verification') OR
+        ("notify"."canceled_after_revocation_during_verification" AND
+          "event"."event" = 'issue_state_changed' AND "event"."state" = 'canceled_after_revocation_during_verification') OR
+        ("notify"."canceled_no_initiative_admitted" AND
+          "event"."event" = 'issue_state_changed' AND "event"."state" = 'canceled_no_initiative_admitted') OR
+        -- voting
+        ("notify"."voting" AND
+          "event"."event" = 'issue_state_changed' AND "event"."state" = 'voting') OR
+        ("notify"."finished_with_winner" AND
+          "event"."event" = 'issue_state_changed' AND "event"."state" = 'finished_with_winner') OR
+        ("notify"."finished_without_winner" AND
+          "event"."event" = 'issue_state_changed' AND "event"."state" = 'finished_without_winner')
+      )
+    )
+  )
   AND "ignored_member"."member_id" ISNULL
-  AND "ignored_initiative"."member_id" ISNULL;
+  AND "ignored_initiative"."member_id" ISNULL
+  GROUP BY "member"."id", "event"."id", "event"."occurrence", "event"."event", "event"."member_id", "event"."issue_id", "event"."state", "event"."initiative_id", "event"."draft_id", "event"."suggestion_id", "event"."argument_id";
 
 COMMENT ON VIEW "event_seen_by_member" IS 'Events as seen by a member, depending on its memberships, interests and support, but ignoring members "notify_level"';
 
@@ -3343,6 +3632,8 @@ CREATE FUNCTION "create_snapshot"
     DECLARE
       "initiative_id_v"    "initiative"."id"%TYPE;
       "suggestion_id_v"    "suggestion"."id"%TYPE;
+      "argument_id_v"      "argument"."id"%TYPE;
+      "side_v"             "argument"."side"%TYPE;
     BEGIN
       PERFORM "lock_issue"("issue_id_p");
       PERFORM "create_population_snapshot"("issue_id_p");
@@ -3508,6 +3799,49 @@ CREATE FUNCTION "create_snapshot"
               AND "opinion"."fulfilled" = TRUE
             )
             WHERE "suggestion"."id" = "suggestion_id_v";
+        END LOOP;
+        FOR "argument_id_v", "side_v" IN
+          SELECT "id", "side" FROM "argument"
+          WHERE "initiative_id" = "initiative_id_v"
+        LOOP
+          IF "side_v" = 'pro' THEN
+            -- count only ratings by supporters
+            UPDATE "argument" SET
+              "plus_count"  = "subquery"."plus_count",
+              "minus_count" = "subquery"."minus_count"
+            FROM (
+              SELECT
+                COUNT(CASE WHEN "rating"."negative" = FALSE THEN 1 ELSE NULL END) AS "plus_count",
+                COUNT(CASE WHEN "rating"."negative" = TRUE  THEN 1 ELSE NULL END) AS "minus_count"
+              FROM "issue" CROSS JOIN "rating"
+              JOIN "direct_supporter_snapshot" AS "snapshot"
+                ON "snapshot"."initiative_id" = "rating"."initiative_id"
+                AND "snapshot"."event" = "issue"."latest_snapshot_event"
+                AND "snapshot"."member_id" = "rating"."member_id"
+              WHERE "issue"."id" = "issue_id_p"
+                AND "rating"."argument_id" = "argument_id_v"
+            ) AS "subquery"
+            WHERE "argument"."id" = "argument_id_v";
+          ELSE
+            -- count only ratings by non-supporters
+            UPDATE "argument" SET
+              "plus_count"  = "subquery"."plus_count",
+              "minus_count" = "subquery"."minus_count"
+            FROM (
+              SELECT
+                COUNT(CASE WHEN "rating"."negative" = FALSE THEN 1 ELSE NULL END) AS "plus_count",
+                COUNT(CASE WHEN "rating"."negative" = TRUE  THEN 1 ELSE NULL END) AS "minus_count"
+              FROM "issue" CROSS JOIN "rating"
+              LEFT JOIN "direct_supporter_snapshot" AS "snapshot"
+                ON "snapshot"."initiative_id" = "rating"."initiative_id"
+                AND "snapshot"."event" = "issue"."latest_snapshot_event"
+                AND "snapshot"."member_id" = "rating"."member_id"
+              WHERE "issue"."id" = "issue_id_p"
+                AND "rating"."argument_id" = "argument_id_v"
+                AND "snapshot"."member_id" IS NULL
+            ) AS "subquery"
+            WHERE "argument"."id" = "argument_id_v";
+          END IF;
         END LOOP;
       END LOOP;
       RETURN;
@@ -3781,10 +4115,18 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
       UPDATE "issue" SET
         "state"  = 'calculation',
         "closed" = now(),
-        "voter_count" = (
-          SELECT coalesce(sum("weight"), 0)
-          FROM "direct_voter" WHERE "issue_id" = "issue_id_p"
-        )
+        "voter_count"        = "subquery"."voter_count",
+        "direct_voter_count" = "subquery"."direct_voter_count"
+        FROM (
+          SELECT
+
+
+
+            coalesce(sum("weight"), 0) AS "voter_count",
+            count(1)                   AS "direct_voter_count"
+          FROM "direct_voter"
+          WHERE "issue_id" = "issue_id_p"
+        ) AS "subquery"
         WHERE "id" = "issue_id_p";
       -- materialize battle_view:
       -- NOTE: "closed" column of issue must be set at this point
@@ -3792,16 +4134,18 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
       INSERT INTO "battle" (
         "issue_id",
         "winning_initiative_id", "losing_initiative_id",
-        "count"
+        "count", "direct_count"
       ) SELECT
         "issue_id",
         "winning_initiative_id", "losing_initiative_id",
-        "count"
+        "count", "direct_count"
         FROM "battle_view" WHERE "issue_id" = "issue_id_p";
       -- copy "positive_votes" and "negative_votes" from "battle" table:
       UPDATE "initiative" SET
         "positive_votes" = "battle_win"."count",
-        "negative_votes" = "battle_lose"."count"
+        "negative_votes" = "battle_lose"."count",
+        "positive_direct_votes" = "battle_win"."direct_count",
+        "negative_direct_votes" = "battle_lose"."direct_count"
         FROM "battle" AS "battle_win", "battle" AS "battle_lose"
         WHERE
           "battle_win"."issue_id" = "issue_id_p" AND
@@ -4327,6 +4671,8 @@ CREATE FUNCTION "clean_issue"("issue_id_p" "issue"."id"%TYPE)
           "closed"          = NULL,
           "ranks_available" = FALSE
           WHERE "id" = "issue_id_p";
+        DELETE FROM "issue_comment"
+          WHERE "issue_id" = "issue_id_p";
         DELETE FROM "delegating_voter"
           WHERE "issue_id" = "issue_id_p";
         DELETE FROM "direct_voter"
