@@ -1,6 +1,6 @@
 <?
 require("constants.php");
-$sData = file_get_contents("http://mitglieder.piratenpartei.at/adm_api/adm1.php");
+$sData = file_get_contents("https://mitglieder.piratenpartei.at/adm_api/adm1.php");
 if (strlen($datakey1) == 0 || strlen($datakey2) == 0)
   die('Kein Passwort!');
 

@@ -1,10 +1,10 @@
 <?
 require("constants.php");
-$sData = file_get_contents("http://mitglieder.piratenpartei.at/adm_api/adm1.php");
+$sData = file_get_contents("https://mitglieder.piratenpartei.at/adm_api/adm1.php");
 if (strlen($datakey1) == 0 || strlen($datakey2) == 0)
   die('Kein Passwort!');
 
-if (strlen($sData) < 100)
+if (strlen($sData) < 1000)
   die('Daten von Mitgliederverwaltung zu kurz!');
 
 $decrypted = rtrim(mcrypt_decrypt(MCRYPT_RIJNDAEL_256, md5($datakey2), base64_decode($sData), MCRYPT_MODE_CBC, md5(md5($datakey2))), "\0");

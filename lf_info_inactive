@@ -1,0 +1,4 @@
+#/bin/bash
+echo "Checking for inactive users"
+cd /opt/liquid_feedback_core/
+php5-cgi info_inactive.php
