@@ -4824,5 +4824,18 @@ CREATE FUNCTION "delete_private_data"()
 COMMENT ON FUNCTION "delete_private_data"() IS 'Used by lf_export script. DO NOT USE on productive database, but only on a copy! This function deletes all data which should not be publicly available, and can be used to create a database dump for publication. See source code to see which data is deleted. If you need a different behaviour, copy this function and modify lf_export accordingly, to avoid data-leaks after updating.';
 
 
+CREATE TABLE auto_freeze (
+    id integer NOT NULL,
+    name text,
+    next_time timestamp with time zone
+);
+
+CREATE SEQUENCE auto_freeze_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
 
 COMMIT;
