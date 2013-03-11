@@ -7,7 +7,7 @@
 BEGIN;
 
 CREATE VIEW "liquid_feedback_version" AS
-  SELECT * FROM (VALUES ('2.1.0', 2, 1, 0))
+  SELECT * FROM (VALUES ('2.2.0', 2, 2, 0))
   AS "subquery"("string", "major", "minor", "revision");
 
 
@@ -311,7 +311,7 @@ COMMENT ON COLUMN "member_image"."scaled" IS 'FALSE for original image, TRUE for
 
 
 CREATE TABLE "member_count" (
-        "calculated"            TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+        "calculated"            TIMESTAMPTZ     NOT NULL DEFAULT now(),
         "total_count"           INT4            NOT NULL );
 
 COMMENT ON TABLE "member_count" IS 'Contains one row which contains the total count of active(!) members and a timestamp indicating when the total member count and area member counts were calculated';
@@ -526,7 +526,6 @@ CREATE TYPE "issue_state" AS ENUM (
         'canceled_issue_not_accepted',
         'canceled_after_revocation_during_discussion',
         'canceled_after_revocation_during_verification',
-        'calculation',
         'canceled_no_initiative_admitted',
         'finished_without_winner', 'finished_with_winner');
 
@@ -538,12 +537,12 @@ CREATE TABLE "issue" (
         "area_id"               INT4            NOT NULL REFERENCES "area" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
         "policy_id"             INT4            NOT NULL REFERENCES "policy" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
         "state"                 "issue_state"   NOT NULL DEFAULT 'admission',
+        "phase_finished"        TIMESTAMPTZ,
         "created"               TIMESTAMPTZ     NOT NULL DEFAULT now(),
         "accepted"              TIMESTAMPTZ,
         "half_frozen"           TIMESTAMPTZ,
         "fully_frozen"          TIMESTAMPTZ,
         "closed"                TIMESTAMPTZ,
-        "ranks_available"       BOOLEAN         NOT NULL DEFAULT FALSE,
         "cleaned"               TIMESTAMPTZ,
         "admission_time"        INTERVAL,
         "discussion_time"       INTERVAL        NOT NULL,
@@ -557,29 +556,27 @@ CREATE TABLE "issue" (
         "status_quo_schulze_rank" INT4,
         CONSTRAINT "admission_time_not_null_unless_instantly_accepted" CHECK (
           "admission_time" NOTNULL OR ("accepted" NOTNULL AND "accepted" = "created") ),
-        CONSTRAINT "valid_state" CHECK ((
-          ("accepted" ISNULL  AND "half_frozen" ISNULL  AND "fully_frozen" ISNULL  AND "closed" ISNULL  AND "ranks_available" = FALSE) OR
-          ("accepted" ISNULL  AND "half_frozen" ISNULL  AND "fully_frozen" ISNULL  AND "closed" NOTNULL AND "ranks_available" = FALSE) OR
-          ("accepted" NOTNULL AND "half_frozen" ISNULL  AND "fully_frozen" ISNULL  AND "closed" ISNULL  AND "ranks_available" = FALSE) OR
-          ("accepted" NOTNULL AND "half_frozen" ISNULL  AND "fully_frozen" ISNULL  AND "closed" NOTNULL AND "ranks_available" = FALSE) OR
-          ("accepted" NOTNULL AND "half_frozen" NOTNULL AND "fully_frozen" ISNULL  AND "closed" ISNULL  AND "ranks_available" = FALSE) OR
-          ("accepted" NOTNULL AND "half_frozen" NOTNULL AND "fully_frozen" ISNULL  AND "closed" NOTNULL AND "ranks_available" = FALSE) OR
-          ("accepted" NOTNULL AND "half_frozen" NOTNULL AND "fully_frozen" NOTNULL AND "closed" ISNULL  AND "ranks_available" = FALSE) OR
-          ("accepted" NOTNULL AND "half_frozen" NOTNULL AND "fully_frozen" NOTNULL AND "closed" NOTNULL AND "ranks_available" = FALSE) OR
-          ("accepted" NOTNULL AND "half_frozen" NOTNULL AND "fully_frozen" NOTNULL AND "closed" NOTNULL AND "ranks_available" = TRUE)) AND (
-          ("state" = 'admission'    AND "closed" ISNULL AND "accepted" ISNULL) OR
-          ("state" = 'discussion'   AND "closed" ISNULL AND "accepted" NOTNULL AND "half_frozen" ISNULL) OR
-          ("state" = 'verification' AND "closed" ISNULL AND "half_frozen" NOTNULL AND "fully_frozen" ISNULL) OR
-          ("state" = 'voting'       AND "closed" ISNULL AND "fully_frozen" NOTNULL) OR
-          ("state" = 'canceled_revoked_before_accepted'              AND "closed" NOTNULL AND "accepted" ISNULL) OR
-          ("state" = 'canceled_issue_not_accepted'                   AND "closed" NOTNULL AND "accepted" ISNULL) OR
-          ("state" = 'canceled_after_revocation_during_discussion'   AND "closed" NOTNULL AND "half_frozen"  ISNULL) OR
-          ("state" = 'canceled_after_revocation_during_verification' AND "closed" NOTNULL AND "fully_frozen" ISNULL) OR
-          ("state" = 'calculation'                     AND "closed" NOTNULL AND "fully_frozen" NOTNULL AND "ranks_available" = FALSE) OR
-          ("state" = 'canceled_no_initiative_admitted' AND "closed" NOTNULL AND "fully_frozen" NOTNULL AND "ranks_available" = TRUE) OR
-          ("state" = 'finished_without_winner'         AND "closed" NOTNULL AND "fully_frozen" NOTNULL AND "ranks_available" = TRUE) OR
-          ("state" = 'finished_with_winner'            AND "closed" NOTNULL AND "fully_frozen" NOTNULL AND "ranks_available" = TRUE)
+        CONSTRAINT "valid_state" CHECK (
+          (
+            ("accepted" ISNULL  AND "half_frozen" ISNULL  AND "fully_frozen" ISNULL ) OR
+            ("accepted" NOTNULL AND "half_frozen" ISNULL  AND "fully_frozen" ISNULL ) OR
+            ("accepted" NOTNULL AND "half_frozen" NOTNULL AND "fully_frozen" ISNULL ) OR
+            ("accepted" NOTNULL AND "half_frozen" NOTNULL AND "fully_frozen" NOTNULL)
+          ) AND (
+            ("state" = 'admission'    AND "closed" ISNULL AND "accepted" ISNULL) OR
+            ("state" = 'discussion'   AND "closed" ISNULL AND "accepted" NOTNULL AND "half_frozen" ISNULL) OR
+            ("state" = 'verification' AND "closed" ISNULL AND "half_frozen" NOTNULL AND "fully_frozen" ISNULL) OR
+            ("state" = 'voting'       AND "closed" ISNULL AND "fully_frozen" NOTNULL) OR
+            ("state" = 'canceled_revoked_before_accepted'              AND "closed" NOTNULL AND "accepted" ISNULL) OR
+            ("state" = 'canceled_issue_not_accepted'                   AND "closed" NOTNULL AND "accepted" ISNULL) OR
+            ("state" = 'canceled_after_revocation_during_discussion'   AND "closed" NOTNULL AND "half_frozen"  ISNULL) OR
+            ("state" = 'canceled_after_revocation_during_verification' AND "closed" NOTNULL AND "fully_frozen" ISNULL) OR
+            ("state" = 'canceled_no_initiative_admitted' AND "closed" NOTNULL AND "fully_frozen" NOTNULL AND "closed" = "fully_frozen") OR
+            ("state" = 'finished_without_winner'         AND "closed" NOTNULL AND "fully_frozen" NOTNULL AND "closed" != "fully_frozen") OR
+            ("state" = 'finished_with_winner'            AND "closed" NOTNULL AND "fully_frozen" NOTNULL AND "closed" != "fully_frozen")
           )),
+        CONSTRAINT "phase_finished_only_when_not_closed" CHECK (
+          "phase_finished" ISNULL OR "closed" ISNULL ),
         CONSTRAINT "state_change_order" CHECK (
           "created"      <= "accepted" AND
           "accepted"     <= "half_frozen" AND
@@ -605,11 +602,11 @@ CREATE INDEX "issue_closed_idx_canceled" ON "issue" ("closed") WHERE "fully_froz
 
 COMMENT ON TABLE "issue" IS 'Groups of initiatives';
 
+COMMENT ON COLUMN "issue"."phase_finished"          IS 'Set to a value NOTNULL, if the current phase has finished, but calculations are pending; No changes in this issue shall be made by the frontend or API when this value is set';
 COMMENT ON COLUMN "issue"."accepted"                IS 'Point in time, when one initiative of issue reached the "issue_quorum"';
 COMMENT ON COLUMN "issue"."half_frozen"             IS 'Point in time, when "discussion_time" has elapsed; Frontends must ensure that for half_frozen issues a) initiatives are not revoked, b) no new drafts are created, c) no initiators are added or removed.';
 COMMENT ON COLUMN "issue"."fully_frozen"            IS 'Point in time, when "verification_time" has elapsed and voting has started; Frontends must ensure that for fully_frozen issues additionally to the restrictions for half_frozen issues a) initiatives are not created, b) no interest is created or removed, c) no supporters are added or removed, d) no opinions are created, changed or deleted.';
 COMMENT ON COLUMN "issue"."closed"                  IS 'Point in time, when "admission_time" or "voting_time" have elapsed, and issue is no longer active; Frontends must ensure that for closed issues additionally to the restrictions for half_frozen and fully_frozen issues a) no voter is added or removed to/from the direct_voter table, b) no votes are added, modified or removed.';
-COMMENT ON COLUMN "issue"."ranks_available"         IS 'TRUE = ranks have been calculated';
 COMMENT ON COLUMN "issue"."cleaned"                 IS 'Point in time, when discussion data and votes had been deleted';
 COMMENT ON COLUMN "issue"."admission_time"          IS 'Copied from "policy" table at creation of issue';
 COMMENT ON COLUMN "issue"."discussion_time"         IS 'Copied from "policy" table at creation of issue';
@@ -649,6 +646,7 @@ CREATE TABLE "initiative" (
         "informed_supporter_count"           INT4,
         "satisfied_supporter_count"          INT4,
         "satisfied_informed_supporter_count" INT4,
+        "harmonic_weight"       NUMERIC(12, 3),
         "positive_votes"        INT4,
         "negative_votes"        INT4,
         "positive_direct_votes" INT4,
@@ -707,6 +705,7 @@ COMMENT ON COLUMN "initiative"."supporter_count"                    IS 'Calculat
 COMMENT ON COLUMN "initiative"."informed_supporter_count"           IS 'Calculated from table "direct_supporter_snapshot"';
 COMMENT ON COLUMN "initiative"."satisfied_supporter_count"          IS 'Calculated from table "direct_supporter_snapshot"';
 COMMENT ON COLUMN "initiative"."satisfied_informed_supporter_count" IS 'Calculated from table "direct_supporter_snapshot"';
+COMMENT ON COLUMN "initiative"."harmonic_weight"        IS 'Indicates the relevancy of the initiative, calculated from the potential supporters weighted with the harmonic series to avoid a large number of clones affecting other initiative''s sorting positions too much; shall be used as secondary sorting key after "admitted" as primary sorting key';
 COMMENT ON COLUMN "initiative"."positive_votes"         IS 'Calculated from table "direct_voter"';
 COMMENT ON COLUMN "initiative"."negative_votes"         IS 'Calculated from table "direct_voter"';
 COMMENT ON COLUMN "initiative"."positive_direct_votes"  IS 'Calculated from table "direct_voter"';
@@ -1239,7 +1238,7 @@ CREATE TABLE "event" (
         "event"                 "event_type"    NOT NULL,
         "member_id"             INT4            REFERENCES "member" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
         "issue_id"              INT4            REFERENCES "issue" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-        "state"                 "issue_state"   CHECK ("state" != 'calculation'),
+        "state"                 "issue_state",
         "initiative_id"         INT4,
         "draft_id"              INT8,
         "suggestion_id"         INT8,
@@ -1347,7 +1346,7 @@ CREATE FUNCTION "write_event_issue_state_changed_trigger"()
   RETURNS TRIGGER
   LANGUAGE 'plpgsql' VOLATILE AS $$
     BEGIN
-      IF NEW."state" != OLD."state" AND NEW."state" != 'calculation' THEN
+      IF NEW."state" != OLD."state" THEN
         INSERT INTO "event" ("event", "issue_id", "state")
           VALUES ('issue_state_changed', NEW."id", NEW."state");
       END IF;
@@ -1744,7 +1743,7 @@ COMMENT ON TRIGGER "voter_comment_fields_only_set_when_voter_comment_is_set" ON 
 
 
 ---------------------------------------------------------------
--- Ensure that votes are not modified when issues are frozen --
+-- Ensure that votes are not modified when issues are closed --
 ---------------------------------------------------------------
 
 -- NOTE: Frontends should ensure this anyway, but in case of programming
@@ -1758,15 +1757,6 @@ CREATE FUNCTION "forbid_changes_on_closed_issue_trigger"()
       "issue_id_v" "issue"."id"%TYPE;
       "issue_row"  "issue"%ROWTYPE;
     BEGIN
-      IF TG_RELID = 'direct_voter'::regclass AND TG_OP = 'UPDATE' THEN
-        IF
-          OLD."issue_id"  = NEW."issue_id"  AND
-          OLD."member_id" = NEW."member_id" AND
-          OLD."weight"    = NEW."weight"
-        THEN
-          RETURN NULL;  -- allows changing of voter comment
-        END IF;
-      END IF;
       IF TG_OP = 'DELETE' THEN
         "issue_id_v" := OLD."issue_id";
       ELSE
@@ -1775,7 +1765,26 @@ CREATE FUNCTION "forbid_changes_on_closed_issue_trigger"()
       SELECT INTO "issue_row" * FROM "issue"
         WHERE "id" = "issue_id_v" FOR SHARE;
       IF "issue_row"."closed" NOTNULL THEN
+        IF
+          TG_RELID = 'direct_voter'::regclass AND
+          TG_OP = 'UPDATE'
+        THEN
+          IF
+            OLD."issue_id"  = NEW."issue_id"  AND
+            OLD."member_id" = NEW."member_id" AND
+            OLD."weight" = NEW."weight"
+          THEN
+            RETURN NULL;  -- allows changing of voter comment
+          END IF;
+        END IF;
         RAISE EXCEPTION 'Tried to modify data belonging to a closed issue.';
+      ELSIF
+        "issue_row"."state" = 'voting' AND
+        "issue_row"."phase_finished" NOTNULL
+      THEN
+        IF TG_RELID = 'vote'::regclass THEN
+          RAISE EXCEPTION 'Tried to modify data after voting has been closed.';
+        END IF;
       END IF;
       RETURN NULL;
     END;
@@ -2238,8 +2247,8 @@ CREATE VIEW "battle_view" AS
   LEFT JOIN "vote" AS "worse_vote"
     ON "direct_voter"."member_id" = "worse_vote"."member_id"
     AND "losing_initiative"."id" = "worse_vote"."initiative_id"
-  WHERE "issue"."closed" NOTNULL
-  AND "issue"."cleaned" ISNULL
+  WHERE "issue"."state" = 'voting'
+  AND "issue"."phase_finished" NOTNULL
   AND (
     "winning_initiative"."id" != "losing_initiative"."id" OR
     ( ("winning_initiative"."id" NOTNULL AND "losing_initiative"."id" ISNULL) OR
@@ -2266,15 +2275,6 @@ CREATE VIEW "open_issue" AS
   SELECT * FROM "issue" WHERE "closed" ISNULL;
 
 COMMENT ON VIEW "open_issue" IS 'All open issues';
-
-
-CREATE VIEW "issue_with_ranks_missing" AS
-  SELECT * FROM "issue"
-  WHERE "fully_frozen" NOTNULL
-  AND "closed" NOTNULL
-  AND "ranks_available" = FALSE;
-
-COMMENT ON VIEW "issue_with_ranks_missing" IS 'Issues where voting was finished, but no ranks have been calculated yet';
 
 
 CREATE VIEW "member_contingent" AS
@@ -2568,144 +2568,6 @@ CREATE VIEW "selected_event_seen_by_member" AS
   AND "ignored_initiative"."member_id" ISNULL;
 
 COMMENT ON VIEW "selected_event_seen_by_member" IS 'Events as seen by a member, depending on its memberships, interests, support and members "notify_level"';
-
-
-CREATE TYPE "timeline_event" AS ENUM (
-  'issue_created',
-  'issue_canceled',
-  'issue_accepted',
-  'issue_half_frozen',
-  'issue_finished_without_voting',
-  'issue_voting_started',
-  'issue_finished_after_voting',
-  'initiative_created',
-  'initiative_revoked',
-  'draft_created',
-  'suggestion_created');
-
-COMMENT ON TYPE "timeline_event" IS 'Types of event in timeline tables (DEPRECATED)';
-
-
-CREATE VIEW "timeline_issue" AS
-    SELECT
-      "created" AS "occurrence",
-      'issue_created'::"timeline_event" AS "event",
-      "id" AS "issue_id"
-    FROM "issue"
-  UNION ALL
-    SELECT
-      "closed" AS "occurrence",
-      'issue_canceled'::"timeline_event" AS "event",
-      "id" AS "issue_id"
-    FROM "issue" WHERE "closed" NOTNULL AND "fully_frozen" ISNULL
-  UNION ALL
-    SELECT
-      "accepted" AS "occurrence",
-      'issue_accepted'::"timeline_event" AS "event",
-      "id" AS "issue_id"
-    FROM "issue" WHERE "accepted" NOTNULL
-  UNION ALL
-    SELECT
-      "half_frozen" AS "occurrence",
-      'issue_half_frozen'::"timeline_event" AS "event",
-      "id" AS "issue_id"
-    FROM "issue" WHERE "half_frozen" NOTNULL
-  UNION ALL
-    SELECT
-      "fully_frozen" AS "occurrence",
-      'issue_voting_started'::"timeline_event" AS "event",
-      "id" AS "issue_id"
-    FROM "issue"
-    WHERE "fully_frozen" NOTNULL
-    AND ("closed" ISNULL OR "closed" != "fully_frozen")
-  UNION ALL
-    SELECT
-      "closed" AS "occurrence",
-      CASE WHEN "fully_frozen" = "closed" THEN
-        'issue_finished_without_voting'::"timeline_event"
-      ELSE
-        'issue_finished_after_voting'::"timeline_event"
-      END AS "event",
-      "id" AS "issue_id"
-    FROM "issue" WHERE "closed" NOTNULL AND "fully_frozen" NOTNULL;
-
-COMMENT ON VIEW "timeline_issue" IS 'Helper view for "timeline" view (DEPRECATED)';
-
-
-CREATE VIEW "timeline_initiative" AS
-    SELECT
-      "created" AS "occurrence",
-      'initiative_created'::"timeline_event" AS "event",
-      "id" AS "initiative_id"
-    FROM "initiative"
-  UNION ALL
-    SELECT
-      "revoked" AS "occurrence",
-      'initiative_revoked'::"timeline_event" AS "event",
-      "id" AS "initiative_id"
-    FROM "initiative" WHERE "revoked" NOTNULL;
-
-COMMENT ON VIEW "timeline_initiative" IS 'Helper view for "timeline" view (DEPRECATED)';
-
-
-CREATE VIEW "timeline_draft" AS
-  SELECT
-    "created" AS "occurrence",
-    'draft_created'::"timeline_event" AS "event",
-    "id" AS "draft_id"
-  FROM "draft";
-
-COMMENT ON VIEW "timeline_draft" IS 'Helper view for "timeline" view (DEPRECATED)';
-
-
-CREATE VIEW "timeline_suggestion" AS
-  SELECT
-    "created" AS "occurrence",
-    'suggestion_created'::"timeline_event" AS "event",
-    "id" AS "suggestion_id"
-  FROM "suggestion";
-
-COMMENT ON VIEW "timeline_suggestion" IS 'Helper view for "timeline" view (DEPRECATED)';
-
-
-CREATE VIEW "timeline" AS
-    SELECT
-      "occurrence",
-      "event",
-      "issue_id",
-      NULL AS "initiative_id",
-      NULL::INT8 AS "draft_id",  -- TODO: Why do we need a type-cast here? Is this due to 32 bit architecture?
-      NULL::INT8 AS "suggestion_id"
-    FROM "timeline_issue"
-  UNION ALL
-    SELECT
-      "occurrence",
-      "event",
-      NULL AS "issue_id",
-      "initiative_id",
-      NULL AS "draft_id",
-      NULL AS "suggestion_id"
-    FROM "timeline_initiative"
-  UNION ALL
-    SELECT
-      "occurrence",
-      "event",
-      NULL AS "issue_id",
-      NULL AS "initiative_id",
-      "draft_id",
-      NULL AS "suggestion_id"
-    FROM "timeline_draft"
-  UNION ALL
-    SELECT
-      "occurrence",
-      "event",
-      NULL AS "issue_id",
-      NULL AS "initiative_id",
-      NULL AS "draft_id",
-      "suggestion_id"
-    FROM "timeline_suggestion";
-
-COMMENT ON VIEW "timeline" IS 'Aggregation of different events in the system (DEPRECATED)';
 
 
 
@@ -3150,135 +3012,44 @@ COMMENT ON FUNCTION "delegation_info"
 
 
 
-------------------------------------------------
--- Locking for snapshots and voting procedure --
-------------------------------------------------
+---------------------------
+-- Transaction isolation --
+---------------------------
 
 
-CREATE FUNCTION "share_row_lock_issue_trigger"()
-  RETURNS TRIGGER
-  LANGUAGE 'plpgsql' VOLATILE AS $$
-    BEGIN
-      IF TG_OP = 'UPDATE' OR TG_OP = 'DELETE' THEN
-        PERFORM NULL FROM "issue" WHERE "id" = OLD."issue_id" FOR SHARE;
-      END IF;
-      IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
-        PERFORM NULL FROM "issue" WHERE "id" = NEW."issue_id" FOR SHARE;
-        RETURN NEW;
-      ELSE
-        RETURN OLD;
-      END IF;
-    END;
-  $$;
-
-COMMENT ON FUNCTION "share_row_lock_issue_trigger"() IS 'Implementation of triggers "share_row_lock_issue" on multiple tables';
-
-
-CREATE FUNCTION "share_row_lock_issue_via_initiative_trigger"()
-  RETURNS TRIGGER
-  LANGUAGE 'plpgsql' VOLATILE AS $$
-    BEGIN
-      IF TG_OP = 'UPDATE' OR TG_OP = 'DELETE' THEN
-        PERFORM NULL FROM "issue"
-          JOIN "initiative" ON "issue"."id" = "initiative"."issue_id"
-          WHERE "initiative"."id" = OLD."initiative_id"
-          FOR SHARE OF "issue";
-      END IF;
-      IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
-        PERFORM NULL FROM "issue"
-          JOIN "initiative" ON "issue"."id" = "initiative"."issue_id"
-          WHERE "initiative"."id" = NEW."initiative_id"
-          FOR SHARE OF "issue";
-        RETURN NEW;
-      ELSE
-        RETURN OLD;
-      END IF;
-    END;
-  $$;
-
-COMMENT ON FUNCTION "share_row_lock_issue_trigger"() IS 'Implementation of trigger "share_row_lock_issue_via_initiative" on table "opinion"';
-
-
-CREATE TRIGGER "share_row_lock_issue"
-  BEFORE INSERT OR UPDATE OR DELETE ON "initiative"
-  FOR EACH ROW EXECUTE PROCEDURE
-  "share_row_lock_issue_trigger"();
-
-CREATE TRIGGER "share_row_lock_issue"
-  BEFORE INSERT OR UPDATE OR DELETE ON "interest"
-  FOR EACH ROW EXECUTE PROCEDURE
-  "share_row_lock_issue_trigger"();
-
-CREATE TRIGGER "share_row_lock_issue"
-  BEFORE INSERT OR UPDATE OR DELETE ON "supporter"
-  FOR EACH ROW EXECUTE PROCEDURE
-  "share_row_lock_issue_trigger"();
-
-CREATE TRIGGER "share_row_lock_issue_via_initiative"
-  BEFORE INSERT OR UPDATE OR DELETE ON "opinion"
-  FOR EACH ROW EXECUTE PROCEDURE
-  "share_row_lock_issue_via_initiative_trigger"();
-
-CREATE TRIGGER "share_row_lock_issue"
-  BEFORE INSERT OR UPDATE OR DELETE ON "direct_voter"
-  FOR EACH ROW EXECUTE PROCEDURE
-  "share_row_lock_issue_trigger"();
-
-CREATE TRIGGER "share_row_lock_issue"
-  BEFORE INSERT OR UPDATE OR DELETE ON "delegating_voter"
-  FOR EACH ROW EXECUTE PROCEDURE
-  "share_row_lock_issue_trigger"();
-
-CREATE TRIGGER "share_row_lock_issue"
-  BEFORE INSERT OR UPDATE OR DELETE ON "vote"
-  FOR EACH ROW EXECUTE PROCEDURE
-  "share_row_lock_issue_trigger"();
-
-COMMENT ON TRIGGER "share_row_lock_issue"                ON "initiative"       IS 'See "lock_issue" function';
-COMMENT ON TRIGGER "share_row_lock_issue"                ON "interest"         IS 'See "lock_issue" function';
-COMMENT ON TRIGGER "share_row_lock_issue"                ON "supporter"        IS 'See "lock_issue" function';
-COMMENT ON TRIGGER "share_row_lock_issue_via_initiative" ON "opinion"          IS 'See "lock_issue" function';
-COMMENT ON TRIGGER "share_row_lock_issue"                ON "direct_voter"     IS 'See "lock_issue" function';
-COMMENT ON TRIGGER "share_row_lock_issue"                ON "delegating_voter" IS 'See "lock_issue" function';
-COMMENT ON TRIGGER "share_row_lock_issue"                ON "vote"             IS 'See "lock_issue" function';
-
-
-CREATE FUNCTION "lock_issue"
-  ( "issue_id_p" "issue"."id"%TYPE )
+CREATE FUNCTION "require_transaction_isolation"()
   RETURNS VOID
   LANGUAGE 'plpgsql' VOLATILE AS $$
     BEGIN
-      -- The following locking order is used:
-      -- 1st) row-level lock on the issue
-      -- 2nd) table-level locks in order of occurrence in the core.sql file
-      PERFORM NULL FROM "issue" WHERE "id" = "issue_id_p" FOR UPDATE;
-      -- NOTE: The row-level exclusive lock in combination with the
-      -- share_row_lock_issue(_via_initiative)_trigger functions (which
-      -- acquire a row-level share lock on the issue) ensure that no data
-      -- is changed, which could affect calculation of snapshots or
-      -- counting of votes. Table "delegation" must be table-level-locked,
-      -- as it also contains issue- and global-scope delegations.
-      PERFORM NULL FROM "member" WHERE "active" FOR SHARE;
-      -- NOTE: As we later cause implicit row-level share locks on many
-      -- active members, we lock them before locking any other table
-      -- to avoid deadlocks
-      LOCK TABLE "member"     IN SHARE MODE;
-      LOCK TABLE "privilege"  IN SHARE MODE;
-      LOCK TABLE "membership" IN SHARE MODE;
-      LOCK TABLE "policy"     IN SHARE MODE;
-      LOCK TABLE "delegation" IN SHARE MODE;
-      LOCK TABLE "direct_population_snapshot"     IN EXCLUSIVE MODE;
-      LOCK TABLE "delegating_population_snapshot" IN EXCLUSIVE MODE;
-      LOCK TABLE "direct_interest_snapshot"       IN EXCLUSIVE MODE;
-      LOCK TABLE "delegating_interest_snapshot"   IN EXCLUSIVE MODE;
-      LOCK TABLE "direct_supporter_snapshot"      IN EXCLUSIVE MODE;
+      IF
+        current_setting('transaction_isolation') NOT IN
+        ('repeatable read', 'serializable')
+      THEN
+        RAISE EXCEPTION 'Insufficient transaction isolation level';
+      END IF;
       RETURN;
     END;
   $$;
 
-COMMENT ON FUNCTION "lock_issue"
-  ( "issue"."id"%TYPE )
-  IS 'Locks the issue and all other data which is used for calculating snapshots or counting votes.';
+COMMENT ON FUNCTION "require_transaction_isolation"() IS 'Throws an exception, if transaction isolation level is too low to provide a consistent snapshot';
+
+
+CREATE FUNCTION "dont_require_transaction_isolation"()
+  RETURNS VOID
+  LANGUAGE 'plpgsql' VOLATILE AS $$
+    BEGIN
+      IF
+        current_setting('transaction_isolation') IN
+        ('repeatable read', 'serializable')
+      THEN
+        RAISE WARNING 'Unneccessary transaction isolation level: %',
+          current_setting('transaction_isolation');
+      END IF;
+      RETURN;
+    END;
+  $$;
+
+COMMENT ON FUNCTION "dont_require_transaction_isolation"() IS 'Raises a warning, if transaction isolation level is higher than READ COMMITTED';
 
 
 
@@ -3286,14 +3057,15 @@ COMMENT ON FUNCTION "lock_issue"
 -- Regular tasks, except calculcation of snapshots and voting results --
 ------------------------------------------------------------------------
 
+
 CREATE FUNCTION "check_activity"()
   RETURNS VOID
   LANGUAGE 'plpgsql' VOLATILE AS $$
     DECLARE
       "system_setting_row" "system_setting"%ROWTYPE;
     BEGIN
+      PERFORM "dont_require_transaction_isolation"();
       SELECT * INTO "system_setting_row" FROM "system_setting";
-      LOCK TABLE "member" IN SHARE ROW EXCLUSIVE MODE;
       IF "system_setting_row"."member_ttl" NOTNULL THEN
         UPDATE "member" SET "active" = FALSE
           WHERE "active" = TRUE
@@ -3310,12 +3082,7 @@ CREATE FUNCTION "calculate_member_counts"()
   RETURNS VOID
   LANGUAGE 'plpgsql' VOLATILE AS $$
     BEGIN
-      LOCK TABLE "member"       IN SHARE MODE;
-      LOCK TABLE "member_count" IN EXCLUSIVE MODE;
-      LOCK TABLE "unit"         IN EXCLUSIVE MODE;
-      LOCK TABLE "area"         IN EXCLUSIVE MODE;
-      LOCK TABLE "privilege"    IN SHARE MODE;
-      LOCK TABLE "membership"   IN SHARE MODE;
+      PERFORM "require_transaction_isolation"();
       DELETE FROM "member_count";
       INSERT INTO "member_count" ("total_count")
         SELECT "total_count" FROM "member_count_view";
@@ -3335,9 +3102,174 @@ COMMENT ON FUNCTION "calculate_member_counts"() IS 'Updates "member_count" table
 
 
 
+------------------------------------
+-- Calculation of harmonic weight --
+------------------------------------
+
+
+CREATE VIEW "remaining_harmonic_supporter_weight" AS
+  SELECT
+    "direct_interest_snapshot"."issue_id",
+    "direct_interest_snapshot"."event",
+    "direct_interest_snapshot"."member_id",
+    "direct_interest_snapshot"."weight" AS "weight_num",
+    count("initiative"."id") AS "weight_den"
+  FROM "issue"
+  JOIN "direct_interest_snapshot"
+    ON "issue"."id" = "direct_interest_snapshot"."issue_id"
+    AND "issue"."latest_snapshot_event" = "direct_interest_snapshot"."event"
+  JOIN "initiative"
+    ON "issue"."id" = "initiative"."issue_id"
+    AND "initiative"."harmonic_weight" ISNULL
+  JOIN "direct_supporter_snapshot"
+    ON "initiative"."id" = "direct_supporter_snapshot"."initiative_id"
+    AND "direct_interest_snapshot"."event" = "direct_supporter_snapshot"."event"
+    AND "direct_interest_snapshot"."member_id" = "direct_supporter_snapshot"."member_id"
+    AND (
+      "direct_supporter_snapshot"."satisfied" = TRUE OR
+      coalesce("initiative"."admitted", FALSE) = FALSE
+    )
+  GROUP BY
+    "direct_interest_snapshot"."issue_id",
+    "direct_interest_snapshot"."event",
+    "direct_interest_snapshot"."member_id",
+    "direct_interest_snapshot"."weight";
+
+COMMENT ON VIEW "remaining_harmonic_supporter_weight" IS 'Helper view for function "set_harmonic_initiative_weights"';
+
+
+CREATE VIEW "remaining_harmonic_initiative_weight_summands" AS
+  SELECT
+    "initiative"."issue_id",
+    "initiative"."id" AS "initiative_id",
+    "initiative"."admitted",
+    sum("remaining_harmonic_supporter_weight"."weight_num") AS "weight_num",
+    "remaining_harmonic_supporter_weight"."weight_den"
+  FROM "remaining_harmonic_supporter_weight"
+  JOIN "initiative"
+    ON "remaining_harmonic_supporter_weight"."issue_id" = "initiative"."issue_id"
+    AND "initiative"."harmonic_weight" ISNULL
+  JOIN "direct_supporter_snapshot"
+    ON "initiative"."id" = "direct_supporter_snapshot"."initiative_id"
+    AND "remaining_harmonic_supporter_weight"."event" = "direct_supporter_snapshot"."event"
+    AND "remaining_harmonic_supporter_weight"."member_id" = "direct_supporter_snapshot"."member_id"
+    AND (
+      "direct_supporter_snapshot"."satisfied" = TRUE OR
+      coalesce("initiative"."admitted", FALSE) = FALSE
+    )
+  GROUP BY
+    "initiative"."issue_id",
+    "initiative"."id",
+    "initiative"."admitted",
+    "remaining_harmonic_supporter_weight"."weight_den";
+
+COMMENT ON VIEW "remaining_harmonic_initiative_weight_summands" IS 'Helper view for function "set_harmonic_initiative_weights"';
+
+
+CREATE VIEW "remaining_harmonic_initiative_weight_dummies" AS
+  SELECT
+    "issue_id",
+    "id" AS "initiative_id",
+    "admitted",
+    0 AS "weight_num",
+    1 AS "weight_den"
+  FROM "initiative"
+  WHERE "harmonic_weight" ISNULL;
+
+COMMENT ON VIEW "remaining_harmonic_initiative_weight_dummies" IS 'Helper view for function "set_harmonic_initiative_weights" providing dummy weights of zero value, which are needed for corner cases where there are no supporters for an initiative at all';
+    
+
+CREATE FUNCTION "set_harmonic_initiative_weights"
+  ( "issue_id_p" "issue"."id"%TYPE )
+  RETURNS VOID
+  LANGUAGE 'plpgsql' VOLATILE AS $$
+    DECLARE
+      "weight_row"   "remaining_harmonic_initiative_weight_summands"%ROWTYPE;
+      "i"            INT4;
+      "count_v"      INT4;
+      "summand_v"    FLOAT;
+      "id_ary"       INT4[];
+      "weight_ary"   FLOAT[];
+      "min_weight_v" FLOAT;
+    BEGIN
+      PERFORM "require_transaction_isolation"();
+      UPDATE "initiative" SET "harmonic_weight" = NULL
+        WHERE "issue_id" = "issue_id_p";
+      LOOP
+        "min_weight_v" := NULL;
+        "i" := 0;
+        "count_v" := 0;
+        FOR "weight_row" IN
+          SELECT * FROM "remaining_harmonic_initiative_weight_summands"
+          WHERE "issue_id" = "issue_id_p"
+          AND (
+            coalesce("admitted", FALSE) = FALSE OR NOT EXISTS (
+              SELECT NULL FROM "initiative"
+              WHERE "issue_id" = "issue_id_p"
+              AND "harmonic_weight" ISNULL
+              AND coalesce("admitted", FALSE) = FALSE
+            )
+          )
+          UNION ALL  -- needed for corner cases
+          SELECT * FROM "remaining_harmonic_initiative_weight_dummies"
+          WHERE "issue_id" = "issue_id_p"
+          AND (
+            coalesce("admitted", FALSE) = FALSE OR NOT EXISTS (
+              SELECT NULL FROM "initiative"
+              WHERE "issue_id" = "issue_id_p"
+              AND "harmonic_weight" ISNULL
+              AND coalesce("admitted", FALSE) = FALSE
+            )
+          )
+          ORDER BY "initiative_id" DESC, "weight_den" DESC
+          -- NOTE: non-admitted initiatives placed first (at last positions),
+          --       latest initiatives treated worse in case of tie
+        LOOP
+          "summand_v" := "weight_row"."weight_num"::FLOAT / "weight_row"."weight_den"::FLOAT;
+          IF "i" = 0 OR "weight_row"."initiative_id" != "id_ary"["i"] THEN
+            "i" := "i" + 1;
+            "count_v" := "i";
+            "id_ary"["i"] := "weight_row"."initiative_id";
+            "weight_ary"["i"] := "summand_v";
+          ELSE
+            "weight_ary"["i"] := "weight_ary"["i"] + "summand_v";
+          END IF;
+        END LOOP;
+        EXIT WHEN "count_v" = 0;
+        "i" := 1;
+        LOOP
+          "weight_ary"["i"] := "weight_ary"["i"]::NUMERIC(18,9)::NUMERIC(12,3);
+          IF "min_weight_v" ISNULL OR "weight_ary"["i"] < "min_weight_v" THEN
+            "min_weight_v" := "weight_ary"["i"];
+          END IF;
+          "i" := "i" + 1;
+          EXIT WHEN "i" > "count_v";
+        END LOOP;
+        "i" := 1;
+        LOOP
+          IF "weight_ary"["i"] = "min_weight_v" THEN
+            UPDATE "initiative" SET "harmonic_weight" = "min_weight_v"
+              WHERE "id" = "id_ary"["i"];
+            EXIT;
+          END IF;
+          "i" := "i" + 1;
+        END LOOP;
+      END LOOP;
+      UPDATE "initiative" SET "harmonic_weight" = 0
+        WHERE "issue_id" = "issue_id_p" AND "harmonic_weight" ISNULL;
+    END;
+  $$;
+
+COMMENT ON FUNCTION "set_harmonic_initiative_weights"
+  ( "issue"."id"%TYPE )
+  IS 'Calculates and sets "harmonic_weight" of initiatives in a given issue';
+
+
+
 ------------------------------
 -- Calculation of snapshots --
 ------------------------------
+
 
 CREATE FUNCTION "weight_of_added_delegations_for_population_snapshot"
   ( "issue_id_p"            "issue"."id"%TYPE,
@@ -3351,6 +3283,7 @@ CREATE FUNCTION "weight_of_added_delegations_for_population_snapshot"
       "weight_v"              INT4;
       "sub_weight_v"          INT4;
     BEGIN
+      PERFORM "require_transaction_isolation"();
       "weight_v" := 0;
       FOR "issue_delegation_row" IN
         SELECT * FROM "issue_delegation"
@@ -3415,6 +3348,7 @@ CREATE FUNCTION "create_population_snapshot"
     DECLARE
       "member_id_v" "member"."id"%TYPE;
     BEGIN
+      PERFORM "require_transaction_isolation"();
       DELETE FROM "direct_population_snapshot"
         WHERE "issue_id" = "issue_id_p"
         AND "event" = 'periodic';
@@ -3487,6 +3421,7 @@ CREATE FUNCTION "weight_of_added_delegations_for_interest_snapshot"
       "weight_v"              INT4;
       "sub_weight_v"          INT4;
     BEGIN
+      PERFORM "require_transaction_isolation"();
       "weight_v" := 0;
       FOR "issue_delegation_row" IN
         SELECT * FROM "issue_delegation"
@@ -3551,6 +3486,7 @@ CREATE FUNCTION "create_interest_snapshot"
     DECLARE
       "member_id_v" "member"."id"%TYPE;
     BEGIN
+      PERFORM "require_transaction_isolation"();
       DELETE FROM "direct_interest_snapshot"
         WHERE "issue_id" = "issue_id_p"
         AND "event" = 'periodic';
@@ -3558,8 +3494,10 @@ CREATE FUNCTION "create_interest_snapshot"
         WHERE "issue_id" = "issue_id_p"
         AND "event" = 'periodic';
       DELETE FROM "direct_supporter_snapshot"
-        WHERE "issue_id" = "issue_id_p"
-        AND "event" = 'periodic';
+        USING "initiative"  -- NOTE: due to missing index on issue_id
+        WHERE "initiative"."issue_id" = "issue_id_p"
+        AND "direct_supporter_snapshot"."initiative_id" = "initiative"."id"
+        AND "direct_supporter_snapshot"."event" = 'periodic';
       INSERT INTO "direct_interest_snapshot"
         ("issue_id", "event", "member_id")
         SELECT
@@ -3635,11 +3573,11 @@ CREATE FUNCTION "create_snapshot"
       "argument_id_v"      "argument"."id"%TYPE;
       "side_v"             "argument"."side"%TYPE;
     BEGIN
-      PERFORM "lock_issue"("issue_id_p");
+      PERFORM "require_transaction_isolation"();
       PERFORM "create_population_snapshot"("issue_id_p");
       PERFORM "create_interest_snapshot"("issue_id_p");
       UPDATE "issue" SET
-        "snapshot" = now(),
+        "snapshot" = coalesce("phase_finished", now()),
         "latest_snapshot_event" = 'periodic',
         "population" = (
           SELECT coalesce(sum("weight"), 0)
@@ -3861,6 +3799,7 @@ CREATE FUNCTION "set_snapshot_event"
     DECLARE
       "event_v" "issue"."latest_snapshot_event"%TYPE;
     BEGIN
+      PERFORM "require_transaction_isolation"();
       SELECT "latest_snapshot_event" INTO "event_v" FROM "issue"
         WHERE "id" = "issue_id_p" FOR UPDATE;
       UPDATE "issue" SET "latest_snapshot_event" = "event_p"
@@ -3874,7 +3813,10 @@ CREATE FUNCTION "set_snapshot_event"
       UPDATE "delegating_interest_snapshot" SET "event" = "event_p"
         WHERE "issue_id" = "issue_id_p" AND "event" = "event_v";
       UPDATE "direct_supporter_snapshot" SET "event" = "event_p"
-        WHERE "issue_id" = "issue_id_p" AND "event" = "event_v";
+        FROM "initiative"  -- NOTE: due to missing index on issue_id
+        WHERE "initiative"."issue_id" = "issue_id_p"
+        AND "direct_supporter_snapshot"."initiative_id" = "initiative"."id"
+        AND "direct_supporter_snapshot"."event" = "event_v";
       RETURN;
     END;
   $$;
@@ -3883,94 +3825,6 @@ COMMENT ON FUNCTION "set_snapshot_event"
   ( "issue"."id"%TYPE,
     "snapshot_event" )
   IS 'Change "event" attribute of the previous ''periodic'' snapshot';
-
-
-
----------------------
--- Freezing issues --
----------------------
-
-CREATE FUNCTION "freeze_after_snapshot"
-  ( "issue_id_p" "issue"."id"%TYPE )
-  RETURNS VOID
-  LANGUAGE 'plpgsql' VOLATILE AS $$
-    DECLARE
-      "issue_row"      "issue"%ROWTYPE;
-      "policy_row"     "policy"%ROWTYPE;
-      "initiative_row" "initiative"%ROWTYPE;
-    BEGIN
-      SELECT * INTO "issue_row" FROM "issue" WHERE "id" = "issue_id_p";
-      SELECT * INTO "policy_row"
-        FROM "policy" WHERE "id" = "issue_row"."policy_id";
-      PERFORM "set_snapshot_event"("issue_id_p", 'full_freeze');
-      FOR "initiative_row" IN
-        SELECT * FROM "initiative"
-        WHERE "issue_id" = "issue_id_p" AND "revoked" ISNULL
-      LOOP
-        IF
-          "initiative_row"."polling" OR (
-            "initiative_row"."satisfied_supporter_count" > 0 AND
-            "initiative_row"."satisfied_supporter_count" *
-            "policy_row"."initiative_quorum_den" >=
-            "issue_row"."population" * "policy_row"."initiative_quorum_num"
-          )
-        THEN
-          UPDATE "initiative" SET "admitted" = TRUE
-            WHERE "id" = "initiative_row"."id";
-        ELSE
-          UPDATE "initiative" SET "admitted" = FALSE
-            WHERE "id" = "initiative_row"."id";
-        END IF;
-      END LOOP;
-      IF EXISTS (
-        SELECT NULL FROM "initiative"
-        WHERE "issue_id" = "issue_id_p" AND "admitted" = TRUE
-      ) THEN
-        UPDATE "issue" SET
-          "state"        = 'voting',
-          "accepted"     = coalesce("accepted", now()),
-          "half_frozen"  = coalesce("half_frozen", now()),
-          "fully_frozen" = now()
-          WHERE "id" = "issue_id_p";
-      ELSE
-        UPDATE "issue" SET
-          "state"           = 'canceled_no_initiative_admitted',
-          "accepted"        = coalesce("accepted", now()),
-          "half_frozen"     = coalesce("half_frozen", now()),
-          "fully_frozen"    = now(),
-          "closed"          = now(),
-          "ranks_available" = TRUE
-          WHERE "id" = "issue_id_p";
-        -- NOTE: The following DELETE statements have effect only when
-        --       issue state has been manipulated
-        DELETE FROM "direct_voter"     WHERE "issue_id" = "issue_id_p";
-        DELETE FROM "delegating_voter" WHERE "issue_id" = "issue_id_p";
-        DELETE FROM "battle"           WHERE "issue_id" = "issue_id_p";
-      END IF;
-      RETURN;
-    END;
-  $$;
-
-COMMENT ON FUNCTION "freeze_after_snapshot"
-  ( "issue"."id"%TYPE )
-  IS 'This function freezes an issue (fully) and starts voting, but must only be called when "create_snapshot" was called in the same transaction.';
-
-
-CREATE FUNCTION "manual_freeze"("issue_id_p" "issue"."id"%TYPE)
-  RETURNS VOID
-  LANGUAGE 'plpgsql' VOLATILE AS $$
-    DECLARE
-      "issue_row" "issue"%ROWTYPE;
-    BEGIN
-      PERFORM "create_snapshot"("issue_id_p");
-      PERFORM "freeze_after_snapshot"("issue_id_p");
-      RETURN;
-    END;
-  $$;
-
-COMMENT ON FUNCTION "manual_freeze"
-  ( "issue"."id"%TYPE )
-  IS 'Freeze an issue manually (fully) and start voting';
 
 
 
@@ -3991,6 +3845,7 @@ CREATE FUNCTION "weight_of_added_vote_delegations"
       "weight_v"              INT4;
       "sub_weight_v"          INT4;
     BEGIN
+      PERFORM "require_transaction_isolation"();
       "weight_v" := 0;
       FOR "issue_delegation_row" IN
         SELECT * FROM "issue_delegation"
@@ -4050,6 +3905,7 @@ CREATE FUNCTION "add_vote_delegations"
     DECLARE
       "member_id_v" "member"."id"%TYPE;
     BEGIN
+      PERFORM "require_transaction_isolation"();
       FOR "member_id_v" IN
         SELECT "member_id" FROM "direct_voter"
         WHERE "issue_id" = "issue_id_p"
@@ -4080,7 +3936,7 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
       "unit_id_v"   "unit"."id"%TYPE;
       "member_id_v" "member"."id"%TYPE;
     BEGIN
-      PERFORM "lock_issue"("issue_id_p");
+      PERFORM "require_transaction_isolation"();
       SELECT "area_id" INTO "area_id_v" FROM "issue" WHERE "id" = "issue_id_p";
       SELECT "unit_id" INTO "unit_id_v" FROM "area"  WHERE "id" = "area_id_v";
       -- delete timestamp of voting comment:
@@ -4111,23 +3967,6 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
       UPDATE "direct_voter" SET "weight" = 1
         WHERE "issue_id" = "issue_id_p";
       PERFORM "add_vote_delegations"("issue_id_p");
-      -- set voter count and mark issue as being calculated:
-      UPDATE "issue" SET
-        "state"  = 'calculation',
-        "closed" = now(),
-        "voter_count"        = "subquery"."voter_count",
-        "direct_voter_count" = "subquery"."direct_voter_count"
-        FROM (
-          SELECT
-
-
-
-            coalesce(sum("weight"), 0) AS "voter_count",
-            count(1)                   AS "direct_voter_count"
-          FROM "direct_voter"
-          WHERE "issue_id" = "issue_id_p"
-        ) AS "subquery"
-        WHERE "id" = "issue_id_p";
       -- materialize battle_view:
       -- NOTE: "closed" column of issue must be set at this point
       DELETE FROM "battle" WHERE "issue_id" = "issue_id_p";
@@ -4140,6 +3979,13 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
         "winning_initiative_id", "losing_initiative_id",
         "count", "direct_count"
         FROM "battle_view" WHERE "issue_id" = "issue_id_p";
+      -- set voter count:
+      UPDATE "issue" SET
+        "voter_count" = (
+          SELECT coalesce(sum("weight"), 0)
+          FROM "direct_voter" WHERE "issue_id" = "issue_id_p"
+        )
+        WHERE "id" = "issue_id_p";
       -- copy "positive_votes" and "negative_votes" from "battle" table:
       UPDATE "initiative" SET
         "positive_votes" = "battle_win"."count",
@@ -4199,9 +4045,9 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
       "winners_ary"       INTEGER[];
       "initiative_id_v"   "initiative"."id"%TYPE;
     BEGIN
+      PERFORM "require_transaction_isolation"();
       SELECT * INTO "issue_row"
-        FROM "issue" WHERE "id" = "issue_id_p"
-        FOR UPDATE;
+        FROM "issue" WHERE "id" = "issue_id_p";
       SELECT * INTO "policy_row"
         FROM "policy" WHERE "id" = "issue_row"."policy_id";
       SELECT count(1) INTO "dimension_v"
@@ -4476,7 +4322,8 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
           ELSE
             'finished_without_winner'::"issue_state"
           END,
-        "ranks_available" = TRUE
+        "closed" = "phase_finished",
+        "phase_finished" = NULL
         WHERE "id" = "issue_id_p";
       RETURN;
     END;
@@ -4493,139 +4340,239 @@ COMMENT ON FUNCTION "calculate_ranks"
 -----------------------------
 
 
+CREATE TYPE "check_issue_persistence" AS (
+        "state"                 "issue_state",
+        "phase_finished"        BOOLEAN,
+        "issue_revoked"         BOOLEAN,
+        "snapshot_created"      BOOLEAN,
+        "harmonic_weights_set"  BOOLEAN,
+        "closed_voting"         BOOLEAN );
+
+COMMENT ON TYPE "check_issue_persistence" IS 'Type of data returned by "check_issue" function, to be passed to subsequent calls of the same function';
+
+
 CREATE FUNCTION "check_issue"
-  ( "issue_id_p" "issue"."id"%TYPE )
-  RETURNS VOID
+  ( "issue_id_p" "issue"."id"%TYPE,
+    "persist"    "check_issue_persistence" )
+  RETURNS "check_issue_persistence"
   LANGUAGE 'plpgsql' VOLATILE AS $$
     DECLARE
-      "issue_row"         "issue"%ROWTYPE;
-      "policy_row"        "policy"%ROWTYPE;
+      "issue_row"      "issue"%ROWTYPE;
+      "policy_row"     "policy"%ROWTYPE;
+      "initiative_row" "initiative"%ROWTYPE;
+      "state_v"        "issue_state";
     BEGIN
-      PERFORM "lock_issue"("issue_id_p");
-      SELECT * INTO "issue_row" FROM "issue" WHERE "id" = "issue_id_p";
-      -- only process open issues:
-      IF "issue_row"."closed" ISNULL THEN
-        SELECT * INTO "policy_row" FROM "policy"
-          WHERE "id" = "issue_row"."policy_id";
-        -- create a snapshot, unless issue is already fully frozen:
-        IF "issue_row"."fully_frozen" ISNULL THEN
-          PERFORM "create_snapshot"("issue_id_p");
-          SELECT * INTO "issue_row" FROM "issue" WHERE "id" = "issue_id_p";
+      PERFORM "require_transaction_isolation"();
+      IF "persist" ISNULL THEN
+        SELECT * INTO "issue_row" FROM "issue" WHERE "id" = "issue_id_p"
+          FOR UPDATE;
+        IF "issue_row"."closed" NOTNULL THEN
+          RETURN NULL;
         END IF;
-        -- eventually close or accept issues, which have not been accepted:
-        IF "issue_row"."accepted" ISNULL THEN
-          IF EXISTS (
-            SELECT NULL FROM "initiative"
-            WHERE "issue_id" = "issue_id_p"
-            AND "supporter_count" > 0
-            AND "supporter_count" * "policy_row"."issue_quorum_den"
-            >= "issue_row"."population" * "policy_row"."issue_quorum_num"
-          ) THEN
-            -- accept issues, if supporter count is high enough
-            PERFORM "set_snapshot_event"("issue_id_p", 'end_of_admission');
-            -- NOTE: "issue_row" used later
-            "issue_row"."state" := 'discussion';
-            "issue_row"."accepted" := now();
-            UPDATE "issue" SET
-              "state"    = "issue_row"."state",
-              "accepted" = "issue_row"."accepted"
-              WHERE "id" = "issue_row"."id";
-          ELSIF
-            now() >= "issue_row"."created" + "issue_row"."admission_time"
-          THEN
-            -- close issues, if admission time has expired
-            PERFORM "set_snapshot_event"("issue_id_p", 'end_of_admission');
-            UPDATE "issue" SET
-              "state" = 'canceled_issue_not_accepted',
-              "closed" = now()
-              WHERE "id" = "issue_row"."id";
-          END IF;
-        END IF;
-        -- eventually half freeze issues:
+        "persist"."state" := "issue_row"."state";
         IF
-          -- NOTE: issue can't be closed at this point, if it has been accepted
-          "issue_row"."accepted" NOTNULL AND
-          "issue_row"."half_frozen" ISNULL
+          ( "issue_row"."state" = 'admission' AND now() >=
+            "issue_row"."created" + "issue_row"."admission_time" ) OR
+          ( "issue_row"."state" = 'discussion' AND now() >=
+            "issue_row"."accepted" + "issue_row"."discussion_time" ) OR
+          ( "issue_row"."state" = 'verification' AND now() >=
+            "issue_row"."half_frozen" + "issue_row"."verification_time" ) OR
+          ( "issue_row"."state" = 'voting' AND now() >=
+            "issue_row"."fully_frozen" + "issue_row"."voting_time" )
         THEN
-          IF
-            now() >= "issue_row"."accepted" + "issue_row"."discussion_time"
-          THEN
-            PERFORM "set_snapshot_event"("issue_id_p", 'half_freeze');
-            -- NOTE: "issue_row" used later
-            "issue_row"."state" := 'verification';
-            "issue_row"."half_frozen" := now();
-            UPDATE "issue" SET
-              "state"       = "issue_row"."state",
-              "half_frozen" = "issue_row"."half_frozen"
-              WHERE "id" = "issue_row"."id";
-          END IF;
+          "persist"."phase_finished" := TRUE;
+        ELSE
+          "persist"."phase_finished" := FALSE;
         END IF;
-        -- close issues after some time, if all initiatives have been revoked:
         IF
-          "issue_row"."closed" ISNULL AND
           NOT EXISTS (
             -- all initiatives are revoked
             SELECT NULL FROM "initiative"
             WHERE "issue_id" = "issue_id_p" AND "revoked" ISNULL
           ) AND (
             -- and issue has not been accepted yet
-            "issue_row"."accepted" ISNULL OR
+            "persist"."state" = 'admission' OR
+            -- or verification time has elapsed
+            ( "persist"."state" = 'verification' AND
+              "persist"."phase_finished" ) OR
+            -- or no initiatives have been revoked lately
             NOT EXISTS (
-              -- or no initiatives have been revoked lately
               SELECT NULL FROM "initiative"
               WHERE "issue_id" = "issue_id_p"
               AND now() < "revoked" + "issue_row"."verification_time"
-            ) OR (
-              -- or verification time has elapsed
-              "issue_row"."half_frozen" NOTNULL AND
-              "issue_row"."fully_frozen" ISNULL AND
-              now() >= "issue_row"."half_frozen" + "issue_row"."verification_time"
             )
           )
         THEN
-          -- NOTE: "issue_row" used later
-          IF "issue_row"."accepted" ISNULL THEN
-            "issue_row"."state" := 'canceled_revoked_before_accepted';
-          ELSIF "issue_row"."half_frozen" ISNULL THEN
-            "issue_row"."state" := 'canceled_after_revocation_during_discussion';
-          ELSE
-            "issue_row"."state" := 'canceled_after_revocation_during_verification';
-          END IF;
-          "issue_row"."closed" := now();
-          UPDATE "issue" SET
-            "state"  = "issue_row"."state",
-            "closed" = "issue_row"."closed"
+          "persist"."issue_revoked" := TRUE;
+        ELSE
+          "persist"."issue_revoked" := FALSE;
+        END IF;
+        IF "persist"."phase_finished" OR "persist"."issue_revoked" THEN
+          UPDATE "issue" SET "phase_finished" = now()
             WHERE "id" = "issue_row"."id";
-        END IF;
-        -- fully freeze issue after verification time:
-        IF
-          "issue_row"."half_frozen" NOTNULL AND
-          "issue_row"."fully_frozen" ISNULL AND
-          "issue_row"."closed" ISNULL AND
-          now() >= "issue_row"."half_frozen" + "issue_row"."verification_time"
+          RETURN "persist";
+        ELSIF
+          "persist"."state" IN ('admission', 'discussion', 'verification')
         THEN
-          PERFORM "freeze_after_snapshot"("issue_id_p");
-          -- NOTE: "issue" might change, thus "issue_row" has to be updated below
-        END IF;
-        SELECT * INTO "issue_row" FROM "issue" WHERE "id" = "issue_id_p";
-        -- close issue by calling close_voting(...) after voting time:
-        IF
-          "issue_row"."closed" ISNULL AND
-          "issue_row"."fully_frozen" NOTNULL AND
-          now() >= "issue_row"."fully_frozen" + "issue_row"."voting_time"
-        THEN
-          PERFORM "close_voting"("issue_id_p");
-          -- calculate ranks will not consume much time and can be done now
-          PERFORM "calculate_ranks"("issue_id_p");
+          RETURN "persist";
+        ELSE
+          RETURN NULL;
         END IF;
       END IF;
-      RETURN;
+      IF
+        "persist"."state" IN ('admission', 'discussion', 'verification') AND
+        coalesce("persist"."snapshot_created", FALSE) = FALSE
+      THEN
+        PERFORM "create_snapshot"("issue_id_p");
+        "persist"."snapshot_created" = TRUE;
+        IF "persist"."phase_finished" THEN
+          IF "persist"."state" = 'admission' THEN
+            PERFORM "set_snapshot_event"("issue_id_p", 'end_of_admission');
+          ELSIF "persist"."state" = 'discussion' THEN
+            PERFORM "set_snapshot_event"("issue_id_p", 'half_freeze');
+          ELSIF "persist"."state" = 'verification' THEN
+            PERFORM "set_snapshot_event"("issue_id_p", 'full_freeze');
+            SELECT * INTO "issue_row" FROM "issue" WHERE "id" = "issue_id_p";
+            SELECT * INTO "policy_row" FROM "policy"
+              WHERE "id" = "issue_row"."policy_id";
+            FOR "initiative_row" IN
+              SELECT * FROM "initiative"
+              WHERE "issue_id" = "issue_id_p" AND "revoked" ISNULL
+              FOR UPDATE
+            LOOP
+              IF
+                "initiative_row"."polling" OR (
+                  "initiative_row"."satisfied_supporter_count" > 0 AND
+                  "initiative_row"."satisfied_supporter_count" *
+                  "policy_row"."initiative_quorum_den" >=
+                  "issue_row"."population" * "policy_row"."initiative_quorum_num"
+                )
+              THEN
+                UPDATE "initiative" SET "admitted" = TRUE
+                  WHERE "id" = "initiative_row"."id";
+              ELSE
+                UPDATE "initiative" SET "admitted" = FALSE
+                  WHERE "id" = "initiative_row"."id";
+              END IF;
+            END LOOP;
+          END IF;
+        END IF;
+        RETURN "persist";
+      END IF;
+      IF
+        "persist"."state" IN ('admission', 'discussion', 'verification') AND
+        coalesce("persist"."harmonic_weights_set", FALSE) = FALSE
+      THEN
+        PERFORM "set_harmonic_initiative_weights"("issue_id_p");
+        "persist"."harmonic_weights_set" = TRUE;
+        IF
+          "persist"."phase_finished" OR
+          "persist"."issue_revoked" OR
+          "persist"."state" = 'admission'
+        THEN
+          RETURN "persist";
+        ELSE
+          RETURN NULL;
+        END IF;
+      END IF;
+      IF "persist"."issue_revoked" THEN
+        IF "persist"."state" = 'admission' THEN
+          "state_v" := 'canceled_revoked_before_accepted';
+        ELSIF "persist"."state" = 'discussion' THEN
+          "state_v" := 'canceled_after_revocation_during_discussion';
+        ELSIF "persist"."state" = 'verification' THEN
+          "state_v" := 'canceled_after_revocation_during_verification';
+        END IF;
+        UPDATE "issue" SET
+          "state"          = "state_v",
+          "closed"         = "phase_finished",
+          "phase_finished" = NULL
+          WHERE "id" = "issue_id_p";
+        RETURN NULL;
+      END IF;
+      IF "persist"."state" = 'admission' THEN
+        SELECT * INTO "issue_row" FROM "issue" WHERE "id" = "issue_id_p"
+          FOR UPDATE;
+        SELECT * INTO "policy_row"
+          FROM "policy" WHERE "id" = "issue_row"."policy_id";
+        IF EXISTS (
+          SELECT NULL FROM "initiative"
+          WHERE "issue_id" = "issue_id_p"
+          AND "supporter_count" > 0
+          AND "supporter_count" * "policy_row"."issue_quorum_den"
+          >= "issue_row"."population" * "policy_row"."issue_quorum_num"
+        ) THEN
+          UPDATE "issue" SET
+            "state"          = 'discussion',
+            "accepted"       = coalesce("phase_finished", now()),
+            "phase_finished" = NULL
+            WHERE "id" = "issue_id_p";
+        ELSIF "issue_row"."phase_finished" NOTNULL THEN
+          UPDATE "issue" SET
+            "state"          = 'canceled_issue_not_accepted',
+            "closed"         = "phase_finished",
+            "phase_finished" = NULL
+            WHERE "id" = "issue_id_p";
+        END IF;
+        RETURN NULL;
+      END IF;
+      IF "persist"."phase_finished" THEN
+        if "persist"."state" = 'discussion' THEN
+          UPDATE "issue" SET
+            "state"          = 'verification',
+            "half_frozen"    = "phase_finished",
+            "phase_finished" = NULL
+            WHERE "id" = "issue_id_p";
+          RETURN NULL;
+        END IF;
+        IF "persist"."state" = 'verification' THEN
+          SELECT * INTO "issue_row" FROM "issue" WHERE "id" = "issue_id_p"
+            FOR UPDATE;
+          SELECT * INTO "policy_row" FROM "policy"
+            WHERE "id" = "issue_row"."policy_id";
+          IF EXISTS (
+            SELECT NULL FROM "initiative"
+            WHERE "issue_id" = "issue_id_p" AND "admitted" = TRUE
+          ) THEN
+            UPDATE "issue" SET
+              "state"          = 'voting',
+              "fully_frozen"   = "phase_finished",
+              "phase_finished" = NULL
+              WHERE "id" = "issue_id_p";
+          ELSE
+            UPDATE "issue" SET
+              "state"          = 'canceled_no_initiative_admitted',
+              "fully_frozen"   = "phase_finished",
+              "closed"         = "phase_finished",
+              "phase_finished" = NULL
+              WHERE "id" = "issue_id_p";
+            -- NOTE: The following DELETE statements have effect only when
+            --       issue state has been manipulated
+            DELETE FROM "direct_voter"     WHERE "issue_id" = "issue_id_p";
+            DELETE FROM "delegating_voter" WHERE "issue_id" = "issue_id_p";
+            DELETE FROM "battle"           WHERE "issue_id" = "issue_id_p";
+          END IF;
+          RETURN NULL;
+        END IF;
+        IF "persist"."state" = 'voting' THEN
+          IF coalesce("persist"."closed_voting", FALSE) = FALSE THEN
+            PERFORM "close_voting"("issue_id_p");
+            "persist"."closed_voting" = TRUE;
+            RETURN "persist";
+          END IF;
+          PERFORM "calculate_ranks"("issue_id_p");
+          RETURN NULL;
+        END IF;
+      END IF;
+      RAISE WARNING 'should not happen';
+      RETURN NULL;
     END;
   $$;
 
 COMMENT ON FUNCTION "check_issue"
-  ( "issue"."id"%TYPE )
-  IS 'Precalculate supporter counts etc. for a given issue, and check, if status change is required; At end of voting the ranking is not calculated by this function, but must be calculated in a seperate transaction using the "calculate_ranks" function.';
+  ( "issue"."id"%TYPE,
+    "check_issue_persistence" )
+  IS 'Precalculate supporter counts etc. for a given issue, and check, if status change is required, and perform the status change when necessary; Function must be called multiple times with the previous result as second parameter, until the result is NULL (see source code of function "check_everything")';
 
 
 CREATE FUNCTION "check_everything"()
@@ -4633,21 +4580,24 @@ CREATE FUNCTION "check_everything"()
   LANGUAGE 'plpgsql' VOLATILE AS $$
     DECLARE
       "issue_id_v" "issue"."id"%TYPE;
+      "persist_v"  "check_issue_persistence";
     BEGIN
+      RAISE WARNING 'Function "check_everything" should only be used for development and debugging purposes';
       DELETE FROM "expired_session";
       PERFORM "check_activity"();
       PERFORM "calculate_member_counts"();
       FOR "issue_id_v" IN SELECT "id" FROM "open_issue" LOOP
-        PERFORM "check_issue"("issue_id_v");
-      END LOOP;
-      FOR "issue_id_v" IN SELECT "id" FROM "issue_with_ranks_missing" LOOP
-        PERFORM "calculate_ranks"("issue_id_v");
+        "persist_v" := NULL;
+        LOOP
+          "persist_v" := "check_issue"("issue_id_v", "persist_v");
+          EXIT WHEN "persist_v" ISNULL;
+        END LOOP;
       END LOOP;
       RETURN;
     END;
   $$;
 
-COMMENT ON FUNCTION "check_everything"() IS 'Amongst other regular tasks this function performs "check_issue" for every open issue, and if possible, automatically calculates ranks. Use this function only for development and debugging purposes, as long transactions with exclusive locking may result. In productive environments you should call the lf_update program instead.';
+COMMENT ON FUNCTION "check_everything"() IS 'Amongst other regular tasks this function performs "check_issue" for every open issue. Use this function only for development and debugging purposes, as you may run into locking and/or serialization problems in productive environments.';
 
 
 
@@ -4667,9 +4617,8 @@ CREATE FUNCTION "clean_issue"("issue_id_p" "issue"."id"%TYPE)
         FOR UPDATE;
       IF "issue_row"."cleaned" ISNULL THEN
         UPDATE "issue" SET
-          "state"           = 'voting',
-          "closed"          = NULL,
-          "ranks_available" = FALSE
+          "state"  = 'voting',
+          "closed" = NULL
           WHERE "id" = "issue_id_p";
         DELETE FROM "issue_comment"
           WHERE "issue_id" = "issue_id_p";
@@ -4690,12 +4639,13 @@ CREATE FUNCTION "clean_issue"("issue_id_p" "issue"."id"%TYPE)
         DELETE FROM "delegation"
           WHERE "issue_id" = "issue_id_p";
         DELETE FROM "supporter"
-          WHERE "issue_id" = "issue_id_p";
+          USING "initiative"  -- NOTE: due to missing index on issue_id
+          WHERE "initiative"."issue_id" = "issue_id_p"
+          AND "supporter"."initiative_id" = "initiative_id";
         UPDATE "issue" SET
-          "state"           = "issue_row"."state",
-          "closed"          = "issue_row"."closed",
-          "ranks_available" = "issue_row"."ranks_available",
-          "cleaned"         = now()
+          "state"   = "issue_row"."state",
+          "closed"  = "issue_row"."closed",
+          "cleaned" = now()
           WHERE "id" = "issue_id_p";
       END IF;
       RETURN;
