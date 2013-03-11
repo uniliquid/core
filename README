@@ -37,6 +37,7 @@ and drop the database by entering the following command:
 $ dropdb liquid_feedback
 
 Updating is done using the update scripts in the update/ directory.
+Do not forget to make backups, before installing any updates.
 After updating it is recommended to recreate the schema as follows
 (assuming the database superuser is named "postgres"):
 $ pg_dump --disable-triggers --data-only DATABASE_NAME > tmp.sql
