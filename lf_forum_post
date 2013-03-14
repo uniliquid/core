@@ -109,7 +109,7 @@ data=`echo "<?php echo urlencode('$data'); ?>" | php5-cgi -q`
 tid=`echo "SELECT forum FROM map WHERE lqfb=$ltid LIMIT 1;" | psql -AqSt lfbot`
 
 password=`awk 'NR==1' /opt/liquid_feedback_core/forum_password.txt`
-curl --ssl -H "Expect:" -d "action=do_login&username=LiquidFeedback&password=$password" "https://forum.piratenpartei.at/member.php" -c /tmp/forum_cookies.txt 2>/dev/null
+curl --ssl -H "Expect:" -d "action=do_login&username=Liquid&password=$password" "https://forum.piratenpartei.at/member.php" -c /tmp/forum_cookies.txt 2>/dev/null
 if ( [ "${#tid}" -gt 0 ] && [ "$tid" -gt 0 ] ); then
   constants=`curl --ssl --no-progress-bar -b /tmp/forum_cookies.txt -c /tmp/forum_cookies.txt "https://forum.piratenpartei.at/newreply.php?tid=$tid" 2>/dev/null | grep -E "name=\"(my_post_key|posthash)"`
   my_post_key=`echo $constants | grep -E "name=\"my_post_key\" value=\"\w+\"" -o`

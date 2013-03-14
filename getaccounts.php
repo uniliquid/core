@@ -18,7 +18,8 @@ $query = 'CREATE TABLE member_update_copy AS SELECT * FROM member';
 $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
 pg_free_result($result);
 
-function updateUnits($lqfb_id, $lo_num, $min, $max, $akk)
+
+function updateUnits($lqfb_id, $lo_num, $min, $max)
 {
   // ======================= set units =========================
   // --------> pirate party austria
@@ -66,6 +67,63 @@ function updateUnits($lqfb_id, $lo_num, $min, $max, $akk)
   }
 }
 
+function updateRegions($lqfb_id, $lo_num, $ro1, $ro2, $min, $max)
+{
+  if ($ro1 != "AT130" && $ro2 != "AT130" && $lo_num != 2)
+  {
+   $query = "SELECT * FROM privilege WHERE member_id = '$lqfb_id' AND unit_id = 2;";
+   $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
+   if ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
+    // remove from AT130
+    $query = "DELETE FROM privilege WHERE member_id = '$lqfb_id' AND unit_id = 2;";
+    echo $query . "\n";
+    $result2 = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
+    pg_free_result($result2);
+   }
+   pg_free_result($result);
+  }
+  // remove from old suborganisation if exists
+  $query = "SELECT unit_id FROM privilege LEFT JOIN unit ON unit_id = unit.id WHERE member_id = '$lqfb_id' AND unit_id >= $min AND unit_id <= $max";
+  if (strlen($ro1) == 5)
+    $query .= " AND description NOT LIKE '%$ro1%'";
+  if (strlen($ro2) == 5)
+    $query .= " AND description NOT LIKE '%$ro2%'";
+  $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
+  if ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
+    $query = "DELETE FROM privilege WHERE member_id = '$lqfb_id' AND unit_id = {$line['unit_id']};";
+    echo $query . "\n";
+    $result2 = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
+    pg_free_result($result2);
+  }
+  pg_free_result($result);
+  if (strlen($ro1) != 5)
+    $ro1 = 'ATXXX';
+  if (strlen($ro2) != 5)
+    $ro2 = 'ATXXX';
+  // check whether already in the right suborganisation
+  $query = "SELECT * FROM unit WHERE description LIKE '%$ro1%' OR description LIKE '%$ro2%';";
+  $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
+  while ($line = pg_fetch_array($result, null, PGSQL_ASSOC))
+  {
+    $query2 = "SELECT * FROM privilege WHERE member_id = '$lqfb_id' AND unit_id = {$line['id']}";
+    $result2 = pg_query($query2) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
+    if ($line2 = pg_fetch_array($result2, null, PGSQL_ASSOC))
+    {
+    }
+    else
+    {
+      // insert into suborganisation
+      $query3 = "INSERT INTO privilege (unit_id, member_id) VALUES ({$line['id']}, $lqfb_id);";
+      echo $query3 . "\n";
+      $result3 = pg_query($query3) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
+      pg_free_result($result3);
+    }
+    pg_free_result($result2);
+  }
+  pg_free_result($result);
+}
+
+
 $decrypted = rtrim(mcrypt_decrypt(MCRYPT_RIJNDAEL_256, md5($datakey2), base64_decode($sData), MCRYPT_MODE_CBC, md5(md5($datakey2))), "\0");
 $lines = explode("\n",$decrypted);
 foreach ($lines as $line)
@@ -81,7 +139,11 @@ foreach ($lines as $line)
   $mail = filter_var($mail_original, FILTER_SANITIZE_EMAIL);
   if (!filter_var($mail, FILTER_VALIDATE_EMAIL)/* || $mail == "mitglied@piratenpartei.at"*/) { /*echo "FATAL: email address invalid: '$mail':\n"; print_r($values);*/ continue; }
   $lo = $values[3];
-  $oo = $values[4];
+  $oo = explode(",", $values[4]);
+  if (count($oo) == 0)
+    $oo[0] = "ATXXX";
+  if (count($oo) == 1)
+    $oo[1] = "ATXXX";
   $akk = ($values[5] != null);
   $paid = ($values[6] != null);
   if (!$akk || !$paid)
@@ -98,11 +160,6 @@ foreach ($lines as $line)
     case 45: $lo_num = 9; break;
     case 37: $lo_num = 2; break;
     default: $lo_num = 0; break;
-  }
-  switch ($oo)
-  {
-    case 90: $oo_num = 11; break;
-    default: $oo_num = 0; break;
   }
   //echo "insert: identification=$idc, email=$mail, lo=$lo_num, oo=$oo_num, akk=$akk, paid=$paid\n";
   $query = "SELECT id,notify_email FROM member WHERE identification='$idc'";
@@ -187,8 +244,8 @@ foreach ($lines as $line)
     echo "Sent invitation to $lqfb_id\n";
     exec("./sendinvitation.sh $lqfb_id");
   }
-  updateUnits($lqfb_id, $lo_num, 2, 10, $akk);
-  updateUnits($lqfb_id, $oo_num, 11, 11, $akk);
+  updateUnits($lqfb_id, $lo_num, 2, 10);
+  updateRegions($lqfb_id, $lo_num, $oo[0], $oo[1], 11, 36);
 }
 
 $query = "SELECT id,identification,notify_email FROM member_update_copy WHERE locked != true AND admin_comment = 'member'";
@@ -219,11 +276,20 @@ while ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
   $lqfb_id = $line["id"];
   $id = $line["identification"];
   $new_identification = mt_rand();
-  // lock user according to admidio data (we got no data so this user has to get locked)
-  $query = "UPDATE member SET admin_comment = 'Austritt', active = false, last_activity = NULL, last_login = NULL, login = NULL, password = NULL, locked = true, lang = NULL, notify_email = NULL, notify_email_unconfirmed = NULL, activated = '2000-01-01', notify_email_secret = NULL, notify_level = NULL, notify_email_lock_expiry = NULL, notify_email_secret_expiry = NULL, password_reset_secret = NULL, password_reset_secret_expiry = NULL, identification = '$new_identification', authentication = NULL, organizational_unit = NULL, internal_posts = NULL, realname = NULL, birthday = NULL, address = NULL, email = NULL, xmpp_address = NULL, website = NULL, phone = NULL, mobile_phone = NULL, profession = NULL, external_memberships = NULL, external_posts = NULL, formatting_engine = NULL, statement = NULL, text_search_data = NULL WHERE id = $lqfb_id;";
+  // try to delete user - this will only work if the member has done NOTHING in the system except for maybe activating his account...
+  $query = "DELETE FROM member WHERE id = $lqfb_id;";
   echo $query . "\n";
-  $result2 = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
+  $result2 = pg_query($query) or false;
+  $update = $result2 == false ? true : false;
   pg_free_result($result2);
+  if ($update)
+  {
+    // lock user according to admidio data (we got no data so this user has to get locked)
+    $query = "UPDATE member SET admin_comment = 'Austritt', active = false, last_activity = NULL, last_login = NULL, login = NULL, password = NULL, locked = true, lang = NULL, notify_email = NULL, notify_email_unconfirmed = NULL, activated = '2000-01-01', notify_email_secret = NULL, notify_level = NULL, notify_email_lock_expiry = NULL, notify_email_secret_expiry = NULL, password_reset_secret = NULL, password_reset_secret_expiry = NULL, identification = '$new_identification', authentication = NULL, organizational_unit = NULL, internal_posts = NULL, realname = NULL, birthday = NULL, address = NULL, email = NULL, xmpp_address = NULL, website = NULL, phone = NULL, mobile_phone = NULL, profession = NULL, external_memberships = NULL, external_posts = NULL, formatting_engine = NULL, statement = NULL, text_search_data = NULL WHERE id = $lqfb_id;";
+    echo $query . "\n";
+    $result2 = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
+    pg_free_result($result2);
+  }
 
   echo "Profile $lqfb_id deleted!!\n";
 }
