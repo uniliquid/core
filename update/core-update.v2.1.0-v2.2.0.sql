@@ -283,7 +283,13 @@ CREATE OR REPLACE VIEW "battle_view" AS
         coalesce("better_vote"."grade", 0) >
         coalesce("worse_vote"."grade", 0)
       THEN "direct_voter"."weight" ELSE 0 END
-    ) AS "count"
+    ) AS "count",
+    sum(
+      CASE WHEN
+        coalesce("better_vote"."grade", 0) >
+        coalesce("worse_vote"."grade", 0)
+      THEN 1 ELSE 0 END
+    ) AS "direct_count"
   FROM "issue"
   LEFT JOIN "direct_voter"
   ON "issue"."id" = "direct_voter"."issue_id"

@@ -4,7 +4,7 @@ require("constants.php");
 $dbconn = pg_connect("dbname=liquid_feedback")
   or die('Verbindungsaufbau fehlgeschlagen: ' . pg_last_error());
 
-$query = "SELECT id,notify_email FROM member WHERE activated NOTNULL AND NOT locked AND last_activity NOTNULL AND last_activity < NOW() - '6 months'::interval AND active;";
+$query = "SELECT id,notify_email FROM member WHERE activated NOTNULL AND NOT locked AND last_activity NOTNULL AND last_activity < (NOW() - '6 months'::interval)::DATE AND active;";
 $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
 while ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
   $lqfb_id = intval($line["id"]);
