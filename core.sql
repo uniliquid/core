@@ -7,7 +7,7 @@
 BEGIN;
 
 CREATE VIEW "liquid_feedback_version" AS
-  SELECT * FROM (VALUES ('2.2.0', 2, 2, 0))
+  SELECT * FROM (VALUES ('2.2.1', 2, 2, 1))
   AS "subquery"("string", "major", "minor", "revision");
 
 
@@ -610,6 +610,7 @@ CREATE TABLE "initiative" (
         "satisfied_supporter_count"          INT4,
         "satisfied_informed_supporter_count" INT4,
         "harmonic_weight"       NUMERIC(12, 3),
+        "final_suggestion_order_calculated" BOOLEAN NOT NULL DEFAULT FALSE,
         "positive_votes"        INT4,
         "negative_votes"        INT4,
         "direct_majority"       BOOLEAN,
@@ -666,6 +667,7 @@ COMMENT ON COLUMN "initiative"."informed_supporter_count"           IS 'Calculat
 COMMENT ON COLUMN "initiative"."satisfied_supporter_count"          IS 'Calculated from table "direct_supporter_snapshot"';
 COMMENT ON COLUMN "initiative"."satisfied_informed_supporter_count" IS 'Calculated from table "direct_supporter_snapshot"';
 COMMENT ON COLUMN "initiative"."harmonic_weight"        IS 'Indicates the relevancy of the initiative, calculated from the potential supporters weighted with the harmonic series to avoid a large number of clones affecting other initiative''s sorting positions too much; shall be used as secondary sorting key after "admitted" as primary sorting key';
+COMMENT ON COLUMN "initiative"."final_suggestion_order_calculated" IS 'Set to TRUE, when "proportional_order" of suggestions has been calculated the last time';
 COMMENT ON COLUMN "initiative"."positive_votes"         IS 'Calculated from table "direct_voter"';
 COMMENT ON COLUMN "initiative"."negative_votes"         IS 'Calculated from table "direct_voter"';
 COMMENT ON COLUMN "initiative"."direct_majority"        IS 'TRUE, if "positive_votes"/("positive_votes"+"negative_votes") is strictly greater or greater-equal than "direct_majority_num"/"direct_majority_den", and "positive_votes" is greater-equal than "direct_majority_positive", and ("positive_votes"+abstentions) is greater-equal than "direct_majority_non_negative"';
@@ -768,7 +770,8 @@ CREATE TABLE "suggestion" (
         "plus1_unfulfilled_count"  INT4,
         "plus1_fulfilled_count"    INT4,
         "plus2_unfulfilled_count"  INT4,
-        "plus2_fulfilled_count"    INT4 );
+        "plus2_fulfilled_count"    INT4,
+        "proportional_order"    INT4 );
 CREATE INDEX "suggestion_created_idx" ON "suggestion" ("created");
 CREATE INDEX "suggestion_author_id_created_idx" ON "suggestion" ("author_id", "created");
 CREATE INDEX "suggestion_text_search_data_idx" ON "suggestion" USING gin ("text_search_data");
@@ -789,6 +792,7 @@ COMMENT ON COLUMN "suggestion"."plus1_unfulfilled_count"  IS 'Calculated from ta
 COMMENT ON COLUMN "suggestion"."plus1_fulfilled_count"    IS 'Calculated from table "direct_supporter_snapshot", not requiring informed supporters';
 COMMENT ON COLUMN "suggestion"."plus2_unfulfilled_count"  IS 'Calculated from table "direct_supporter_snapshot", not requiring informed supporters';
 COMMENT ON COLUMN "suggestion"."plus2_fulfilled_count"    IS 'Calculated from table "direct_supporter_snapshot", not requiring informed supporters';
+COMMENT ON COLUMN "suggestion"."proportional_order"       IS 'To be used for sorting suggestions within an initiative; NULL values sort last; updated by "lf_update_suggestion_order"';
 
 
 CREATE TABLE "rendered_suggestion" (
@@ -2026,6 +2030,51 @@ CREATE VIEW "critical_opinion" AS
   OR ("degree" = -2 AND "fulfilled" = TRUE);
 
 COMMENT ON VIEW "critical_opinion" IS 'Opinions currently causing dissatisfaction';
+
+
+CREATE VIEW "initiative_suggestion_order_calculation" AS
+  SELECT
+    "initiative"."id" AS "initiative_id",
+    ("issue"."closed" NOTNULL OR "issue"."fully_frozen" NOTNULL) AS "final"
+  FROM "initiative" JOIN "issue"
+  ON "initiative"."issue_id" = "issue"."id"
+  WHERE ("issue"."closed" ISNULL AND "issue"."fully_frozen" ISNULL)
+  OR ("initiative"."final_suggestion_order_calculated" = FALSE);
+
+COMMENT ON VIEW "initiative_suggestion_order_calculation" IS 'Initiatives, where the "proportional_order" of its suggestions has to be calculated';
+
+COMMENT ON COLUMN "initiative_suggestion_order_calculation"."final" IS 'Set to TRUE, if the issue is fully frozen or closed, and the calculation has to be done only once for one last time';
+
+
+CREATE VIEW "individual_suggestion_ranking" AS
+  SELECT
+    "opinion"."initiative_id",
+    "opinion"."member_id",
+    "direct_interest_snapshot"."weight",
+    CASE WHEN
+      ("opinion"."degree" = 2 AND "opinion"."fulfilled" = FALSE) OR
+      ("opinion"."degree" = -2 AND "opinion"."fulfilled" = TRUE)
+    THEN 1 ELSE
+      CASE WHEN
+        ("opinion"."degree" = 1 AND "opinion"."fulfilled" = FALSE) OR
+        ("opinion"."degree" = -1 AND "opinion"."fulfilled" = TRUE)
+      THEN 2 ELSE
+        CASE WHEN
+          ("opinion"."degree" = 2 AND "opinion"."fulfilled" = TRUE) OR
+          ("opinion"."degree" = -2 AND "opinion"."fulfilled" = FALSE)
+        THEN 3 ELSE 4 END
+      END
+    END AS "preference",
+    "opinion"."suggestion_id"
+  FROM "opinion"
+  JOIN "initiative" ON "initiative"."id" = "opinion"."initiative_id"
+  JOIN "issue" ON "issue"."id" = "initiative"."issue_id"
+  JOIN "direct_interest_snapshot"
+    ON  "direct_interest_snapshot"."issue_id" = "issue"."id"
+    AND "direct_interest_snapshot"."event" = "issue"."latest_snapshot_event"
+    AND "direct_interest_snapshot"."member_id" = "opinion"."member_id";
+
+COMMENT ON VIEW "individual_suggestion_ranking" IS 'Helper view for "lf_update_suggestion_order" to allow a proportional ordering of suggestions within an initiative';
 
 
 CREATE VIEW "battle_participant" AS
