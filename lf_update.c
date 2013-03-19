@@ -9,6 +9,7 @@ static char *escapeLiteral(PGconn *conn, const char *str, size_t len) {
   char *res;
   size_t res_len;
   res = malloc(2*len+3);
+  if (!res) return NULL;
   res[0] = '\'';
   res_len = PQescapeStringConn(conn, res+1, str, len, NULL);
   res[res_len+1] = '\'';
@@ -37,14 +38,14 @@ int main(int argc, char **argv) {
   if (argc == 1 || !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) {
     FILE *out;
     out = argc == 1 ? stderr : stdout;
-    fprintf(stdout, "\n");
-    fprintf(stdout, "Usage: %s <conninfo>\n", argv[0]);
-    fprintf(stdout, "\n");
-    fprintf(stdout, "<conninfo> is specified by PostgreSQL's libpq,\n");
-    fprintf(stdout, "see http://www.postgresql.org/docs/9.1/static/libpq-connect.html\n");
-    fprintf(stdout, "\n");
-    fprintf(stdout, "Example: %s dbname=liquid_feedback\n", argv[0]);
-    fprintf(stdout, "\n");
+    fprintf(out, "\n");
+    fprintf(out, "Usage: %s <conninfo>\n", argv[0]);
+    fprintf(out, "\n");
+    fprintf(out, "<conninfo> is specified by PostgreSQL's libpq,\n");
+    fprintf(out, "see http://www.postgresql.org/docs/9.1/static/libpq-connect.html\n");
+    fprintf(out, "\n");
+    fprintf(out, "Example: %s dbname=liquid_feedback\n", argv[0]);
+    fprintf(out, "\n");
     return argc == 1 ? 1 : 0;
   }
   {
@@ -138,6 +139,11 @@ int main(int argc, char **argv) {
       int j;
       issue_id = PQgetvalue(res, i, 0);
       escaped_issue_id = escapeLiteral(db, issue_id, strlen(issue_id));
+      if (!escaped_issue_id) {
+        fprintf(stderr, "Could not escape literal in memory.\n");
+        err = 1;
+        break;
+      }
       old_res2 = NULL;
       for (j=0; ; j++) {
         if (j >= 20) {  // safety to avoid endless loops
@@ -159,6 +165,12 @@ int main(int argc, char **argv) {
           char *persist, *escaped_persist, *cmd;
           persist = PQgetvalue(old_res2, 0, 0);
           escaped_persist = escapeLiteral(db, persist, strlen(persist));
+          if (!escaped_persist) {
+            fprintf(stderr, "Could not escape literal in memory.\n");
+            err = 1;
+            PQclear(old_res2);
+            break;
+          }
           if (asprintf(&cmd, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ; SELECT \"check_issue\"(%s, %s::\"check_issue_persistence\")", escaped_issue_id, escaped_persist) < 0) {
             freemem(escaped_persist);
             fprintf(stderr, "Could not prepare query string in memory.\n");
@@ -197,7 +209,7 @@ int main(int argc, char **argv) {
     PQclear(res);
   }
 
-  // cleanup and exit
+  // cleanup and exit:
   PQfinish(db);
   return err;
 
