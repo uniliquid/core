@@ -2,17 +2,15 @@
 
 php-cgi /opt/liquid_feedback_core/showaccounts.php > /tmp/showaccounts.tmp
 
-for i in 1 2 3 4 5 6 7 8 9 10; do
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   # n=`echo "SELECT COUNT(*) FROM privilege AS a JOIN member AS b ON a.member_id = b.id WHERE a.unit_id = $i AND a.voting_right = true AND b.locked = false" | psql liquid_feedback | head -n 3 | tail -n 1 | grep -o -E "[0-9]+"`
   a=`echo "SELECT COUNT(*) FROM privilege AS a JOIN member AS b ON a.member_id = b.id WHERE a.unit_id = $i AND a.voting_right = true AND b.locked = false AND b.active = true" | psql liquid_feedback | head -n 3 | tail -n 1 | grep -o -E "[0-9]+"`
   if [ $i -eq 1 ]; then
-    n=`grep lo= /tmp/showaccounts.tmp | wc -l`
-  elif [ $i -lt 11 ]; then
-    n=`grep lo=$i /tmp/showaccounts.tmp | wc -l`
+    n=`grep unit= /tmp/showaccounts.tmp | wc -l`
   else
-    n=`grep oo=$i /tmp/showaccounts.tmp | wc -l`
+    n=`grep unit=$i /tmp/showaccounts.tmp | wc -l`
   fi
-  if ( [ $i -ne 8 ] && [ "$n" -eq "0" ] ); then
+  if ( [ $i -eq "1" ] && [ "$n" -eq "0" ] ); then
     echo "error3! $n"
     exit 0
   fi
