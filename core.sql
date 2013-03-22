@@ -1782,13 +1782,13 @@ CREATE FUNCTION "forbid_changes_on_closed_issue_trigger"()
           END IF;
         END IF;
         RAISE EXCEPTION 'Tried to modify data belonging to a closed issue.';
-      ELSIF
-        "issue_row"."state" = 'voting' AND
-        "issue_row"."phase_finished" NOTNULL
-      THEN
-        IF TG_RELID = 'vote'::regclass THEN
-          RAISE EXCEPTION 'Tried to modify data after voting has been closed.';
-        END IF;
+      --ELSIF
+      --  "issue_row"."state" = 'voting' AND
+      --  "issue_row"."phase_finished" NOTNULL
+      --THEN
+      --  IF TG_RELID = 'vote'::regclass THEN
+      --    RAISE EXCEPTION 'Tried to modify data after voting has been closed.';
+      --  END IF;
       END IF;
       RETURN NULL;
     END;
@@ -2296,8 +2296,7 @@ CREATE VIEW "battle_view" AS
   LEFT JOIN "vote" AS "worse_vote"
     ON "direct_voter"."member_id" = "worse_vote"."member_id"
     AND "losing_initiative"."id" = "worse_vote"."initiative_id"
-  WHERE "issue"."state" = 'voting'
-  AND "issue"."phase_finished" NOTNULL
+  WHERE "issue"."state" = 'voting
   AND (
     "winning_initiative"."id" != "losing_initiative"."id" OR
     ( ("winning_initiative"."id" NOTNULL AND "losing_initiative"."id" ISNULL) OR
