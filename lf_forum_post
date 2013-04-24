@@ -128,7 +128,7 @@ else
   subject="${subject:(0):(81)}"
   subject=`echo "<?php echo urlencode('$subject'); ?>" | php5-cgi -q`
   curl --ssl -H "Expect:" -vs -b /tmp/forum_cookies.txt -d "my_post_key=$my_post_key&subject=$subject&message=$data&submit=Thema absenden&action=do_newthread&posthash=$posthash&tid=" "https://forum.piratenpartei.at/newthread.php?fid=$fid&processed=1" 2>/tmp/forum_request.txt
-  tid=`grep Location: /tmp/forum_request.txt | grep -o -E "tid=[0-9]+" | grep -o -E "[0-9]+"`
+  tid=`grep Location: /tmp/forum_request.txt | grep -o -E "thread-[0-9]+" | grep -o -E "[0-9]+"`
   if ( [ "${#tid}" -gt 0 ] && [ "$tid" -gt 0 ] ); then
     echo "INSERT INTO map (lqfb,forum) VALUES ($ltid,$tid);" | psql -AqSt lfbot
   fi
