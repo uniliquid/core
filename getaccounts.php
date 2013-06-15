@@ -244,7 +244,12 @@ foreach ($lines as $line)
     echo "Sent invitation to $lqfb_id\n";
     exec("./sendinvitation.sh $lqfb_id");
   }
-  updateUnits($lqfb_id, $lo_num, 2, 10);
+  $min = 2;
+  if ($oo[0] == "AT130" || $oo[1] == "AT130")
+  {
+    $min = 3;
+  }
+  updateUnits($lqfb_id, $lo_num, $min, 10);
   updateRegions($lqfb_id, $lo_num, $oo[0], $oo[1], 11, 36);
 }
 

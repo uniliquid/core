@@ -69,6 +69,12 @@ case $area in
    fid=78;;
 "33")
    fid=53;;
+"34")
+   fid=76;;
+"35")
+   fid=53;;
+"36")
+   fid=76;;
 *)
    echo "Unknown area id: $area" >> /var/log/lqfb/notification.log
    exit -2
@@ -110,7 +116,8 @@ tid=`echo "SELECT forum FROM map WHERE lqfb=$ltid LIMIT 1;" | psql -AqSt lfbot`
 
 password=`awk 'NR==1' /opt/liquid_feedback_core/forum_password.txt`
 curl --ssl -H "Expect:" -d "action=do_login&username=Liquid&password=$password" "https://forum.piratenpartei.at/member.php" -c /tmp/forum_cookies.txt 2>/dev/null
-if ( [ "${#tid}" -gt 0 ] && [ "$tid" -gt 0 ] ); then
+if ( [ "${#tid}" -gt 0 ] && [ "$tid" -gt 0 ] && [ "$tid" -ne 4560 ] ); then
+  echo "well this is $tid"
   constants=`curl --ssl --no-progress-bar -b /tmp/forum_cookies.txt -c /tmp/forum_cookies.txt "https://forum.piratenpartei.at/newreply.php?tid=$tid" 2>/dev/null | grep -E "name=\"(my_post_key|posthash)"`
   my_post_key=`echo $constants | grep -E "name=\"my_post_key\" value=\"\w+\"" -o`
   my_post_key=${my_post_key:(26):(32)}
@@ -120,6 +127,7 @@ if ( [ "${#tid}" -gt 0 ] && [ "$tid" -gt 0 ] ); then
   subject=`echo "<?php echo urlencode('$subject'); ?>" | php5-cgi -q`
   curl --ssl -H "Expect:" -b /tmp/forum_cookies.txt -d "my_post_key=$my_post_key&subject=$subject&message=$data&submit=Antwort absenden&action=do_newreply&posthash=$posthash&tid=$tid" "https://forum.piratenpartei.at/newreply.php?tid=$tid&processed=1"
 else
+  echo "new post yay"
   constants=`curl --ssl --no-progress-bar -b /tmp/forum_cookies.txt -c /tmp/forum_cookies.txt "https://forum.piratenpartei.at/newthread.php?fid=$fid" 2>/dev/null | grep -E "name=\"(my_post_key|posthash)"`
   my_post_key=`echo $constants | grep -E "name=\"my_post_key\" value=\"\w+\"" -o`
   my_post_key=${my_post_key:(26):(32)}
