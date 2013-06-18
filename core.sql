@@ -3432,22 +3432,15 @@ CREATE FUNCTION "create_population_snapshot"
           AND "privilege"."member_id" = "member"."id"
         WHERE "issue"."id" = "issue_id_p"
         AND "member"."active" AND "privilege"."voting_right";
-      FOR "member_id_v" IN
-        SELECT "member_id" FROM "direct_population_snapshot"
-        WHERE "issue_id" = "issue_id_p"
-        AND "event" = 'periodic'
-      LOOP
         UPDATE "direct_population_snapshot" SET
           "weight" = 1 +
             "weight_of_added_delegations_for_population_snapshot"(
               "issue_id_p",
-              "member_id_v",
+              "member_id",
               '{}'
             )
           WHERE "issue_id" = "issue_id_p"
-          AND "event" = 'periodic'
-          AND "member_id" = "member_id_v";
-      END LOOP;
+          AND "event" = 'periodic';
       RETURN;
     END;
   $$;
@@ -3561,21 +3554,15 @@ CREATE FUNCTION "create_interest_snapshot"
           AND "privilege"."member_id" = "member"."id"
         WHERE "issue"."id" = "issue_id_p"
         AND "member"."active" AND "privilege"."voting_right";
-      FOR "member_id_v" IN
-        SELECT "member_id" FROM "direct_interest_snapshot"
-        WHERE "issue_id" = "issue_id_p"
-        AND "event" = 'periodic'
-      LOOP
         UPDATE "direct_interest_snapshot" SET
           "weight" = 1 +
             "weight_of_added_delegations_for_interest_snapshot"(
               "issue_id_p",
-              "member_id_v",
+              "member_id",
               '{}'
             )
           WHERE "issue_id" = "issue_id_p"
-          AND "event" = 'periodic'
-          AND "member_id" = "member_id_v";
+          AND "event" = 'periodic';
       END LOOP;
       INSERT INTO "direct_supporter_snapshot"
         ( "issue_id", "initiative_id", "event", "member_id",

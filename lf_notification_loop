@@ -15,6 +15,6 @@ while true; do
   echo "Event:send_notifications_loop()" | su www-data -c "../webmcp/bin/webmcp_shell myconfig >> /var/log/lqfb/notification.log"
   date >> /var/log/lqfb/notification.log
   echo "Event:send_notifications_loop() terminated." >> /var/log/lqfb/notification.log
-  sleep 120
+  sleep 300
 done
 

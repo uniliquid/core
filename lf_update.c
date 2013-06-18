@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <libpq-fe.h>
+#include <sys/time.h>
 
 static char *escapeLiteral(PGconn *conn, const char *str, size_t len) {
   // provides compatibility for PostgreSQL versions prior 9.0
@@ -32,6 +33,8 @@ int main(int argc, char **argv) {
   char *conninfo;
   PGconn *db;
   PGresult *res;
+  //struct timeval start,stop;
+  //gettimeofday(&start, NULL);
 
   // parse command line:
   if (argc == 0) return 1;
@@ -138,6 +141,9 @@ int main(int argc, char **argv) {
       PGresult *res2, *old_res2;
       int j;
       issue_id = PQgetvalue(res, i, 0);
+      //gettimeofday(&stop, NULL);
+      //printf("issue: %s, %lus%lums\n", issue_id,stop.tv_sec - start.tv_sec,(stop.tv_usec - start.tv_usec) / 1000);
+      //gettimeofday(&start, NULL);
       escaped_issue_id = escapeLiteral(db, issue_id, strlen(issue_id));
       if (!escaped_issue_id) {
         fprintf(stderr, "Could not escape literal in memory.\n");
