@@ -616,7 +616,7 @@ COMMENT ON COLUMN "issue"."snapshot"                IS 'Point in time, when snap
 COMMENT ON COLUMN "issue"."latest_snapshot_event"   IS 'Event type of latest snapshot for issue; Can be used to select the latest snapshot data in the snapshot tables';
 COMMENT ON COLUMN "issue"."population"              IS 'Sum of "weight" column in table "direct_population_snapshot"';
 COMMENT ON COLUMN "issue"."voter_count"             IS 'Total number of direct and delegating voters; This value is related to the final voting, while "population" is related to snapshots before the final voting';
-COMMENT ON COLUMN "issue"."voter_count"             IS 'Total number of direct voters';
+COMMENT ON COLUMN "issue"."direct_voter_count"		IS 'Total number of direct voters';
 COMMENT ON COLUMN "issue"."status_quo_schulze_rank" IS 'Schulze rank of status quo, as calculated by "calculate_ranks" function';
 
 
@@ -4019,6 +4019,12 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
         "voter_count" = (
           SELECT coalesce(sum("weight"), 0)
           FROM "direct_voter" WHERE "issue_id" = "issue_id_p"
+        )
+        WHERE "id" = "issue_id_p";
+      -- set direct voter count:
+      UPDATE "issue" SET
+        "direct_voter_count" = (
+          SELECT count(*) FROM "direct_voter" WHERE "issue_id" = "issue_id_p"
         )
         WHERE "id" = "issue_id_p";
       -- copy "positive_votes" and "negative_votes" from "battle" table:
