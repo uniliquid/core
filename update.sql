@@ -1,226 +1,220 @@
 BEGIN;
 
-CREATE OR REPLACE FUNCTION "create_snapshot"
-  ( "issue_id_p" "issue"."id"%TYPE )
-  RETURNS VOID
+CREATE OR REPLACE FUNCTION "check_issue"
+  ( "issue_id_p" "issue"."id"%TYPE,
+    "persist"    "check_issue_persistence" )
+  RETURNS "check_issue_persistence"
   LANGUAGE 'plpgsql' VOLATILE AS $$
     DECLARE
-      "initiative_id_v"    "initiative"."id"%TYPE;
-      "suggestion_id_v"    "suggestion"."id"%TYPE;
-      "argument_id_v"      "argument"."id"%TYPE;
-      "side_v"             "argument"."side"%TYPE;
+      "issue_row"      "issue"%ROWTYPE;
+      "policy_row"     "policy"%ROWTYPE;
+      "initiative_row" "initiative"%ROWTYPE;
+      "state_v"        "issue_state";
     BEGIN
       PERFORM "require_transaction_isolation"();
-      PERFORM "create_population_snapshot"("issue_id_p");
-      PERFORM "create_interest_snapshot"("issue_id_p");
-      UPDATE "issue" SET
-        "snapshot" = coalesce("phase_finished", now()),
-        "latest_snapshot_event" = 'periodic',
-        "population" = (
-          SELECT coalesce(sum("weight"), 0)
-          FROM "direct_population_snapshot"
-          WHERE "issue_id" = "issue_id_p"
-          AND "event" = 'periodic'
-        )
-        WHERE "id" = "issue_id_p";
-      FOR "initiative_id_v" IN
-        SELECT "id" FROM "initiative" WHERE "issue_id" = "issue_id_p"
-      LOOP
-        UPDATE "initiative" SET
-          "supporter_count" = (
-            SELECT coalesce(sum("di"."weight"), 0)
-            FROM "direct_interest_snapshot" AS "di"
-            JOIN "direct_supporter_snapshot" AS "ds"
-            ON "di"."member_id" = "ds"."member_id"
-            WHERE "di"."issue_id" = "issue_id_p"
-            AND "di"."event" = 'periodic'
-            AND "ds"."initiative_id" = "initiative_id_v"
-            AND "ds"."event" = 'periodic'
-            AND "ds"."satisfied" -- do not count potential supporters (i3794)
-          ),
-          "informed_supporter_count" = (
-            SELECT coalesce(sum("di"."weight"), 0)
-            FROM "direct_interest_snapshot" AS "di"
-            JOIN "direct_supporter_snapshot" AS "ds"
-            ON "di"."member_id" = "ds"."member_id"
-            WHERE "di"."issue_id" = "issue_id_p"
-            AND "di"."event" = 'periodic'
-            AND "ds"."initiative_id" = "initiative_id_v"
-            AND "ds"."event" = 'periodic'
-            AND "ds"."informed"
-          ),
-          "satisfied_supporter_count" = (
-            SELECT coalesce(sum("di"."weight"), 0)
-            FROM "direct_interest_snapshot" AS "di"
-            JOIN "direct_supporter_snapshot" AS "ds"
-            ON "di"."member_id" = "ds"."member_id"
-            WHERE "di"."issue_id" = "issue_id_p"
-            AND "di"."event" = 'periodic'
-            AND "ds"."initiative_id" = "initiative_id_v"
-            AND "ds"."event" = 'periodic'
-            AND "ds"."satisfied"
-          ),
-          "satisfied_informed_supporter_count" = (
-            SELECT coalesce(sum("di"."weight"), 0)
-            FROM "direct_interest_snapshot" AS "di"
-            JOIN "direct_supporter_snapshot" AS "ds"
-            ON "di"."member_id" = "ds"."member_id"
-            WHERE "di"."issue_id" = "issue_id_p"
-            AND "di"."event" = 'periodic'
-            AND "ds"."initiative_id" = "initiative_id_v"
-            AND "ds"."event" = 'periodic'
-            AND "ds"."informed"
-            AND "ds"."satisfied"
-          )
-          WHERE "id" = "initiative_id_v";
-        FOR "suggestion_id_v" IN
-          SELECT "id" FROM "suggestion"
-          WHERE "initiative_id" = "initiative_id_v"
-        LOOP
-          UPDATE "suggestion" SET
-            "minus2_unfulfilled_count" = (
-              SELECT coalesce(sum("snapshot"."weight"), 0)
-              FROM "issue" CROSS JOIN "opinion"
-              JOIN "direct_interest_snapshot" AS "snapshot"
-              ON "snapshot"."issue_id" = "issue"."id"
-              AND "snapshot"."event" = "issue"."latest_snapshot_event"
-              AND "snapshot"."member_id" = "opinion"."member_id"
-              WHERE "issue"."id" = "issue_id_p"
-              AND "opinion"."suggestion_id" = "suggestion_id_v"
-              AND "opinion"."degree" = -2
-              AND "opinion"."fulfilled" = FALSE
-            ),
-            "minus2_fulfilled_count" = (
-              SELECT coalesce(sum("snapshot"."weight"), 0)
-              FROM "issue" CROSS JOIN "opinion"
-              JOIN "direct_interest_snapshot" AS "snapshot"
-              ON "snapshot"."issue_id" = "issue"."id"
-              AND "snapshot"."event" = "issue"."latest_snapshot_event"
-              AND "snapshot"."member_id" = "opinion"."member_id"
-              WHERE "issue"."id" = "issue_id_p"
-              AND "opinion"."suggestion_id" = "suggestion_id_v"
-              AND "opinion"."degree" = -2
-              AND "opinion"."fulfilled" = TRUE
-            ),
-            "minus1_unfulfilled_count" = (
-              SELECT coalesce(sum("snapshot"."weight"), 0)
-              FROM "issue" CROSS JOIN "opinion"
-              JOIN "direct_interest_snapshot" AS "snapshot"
-              ON "snapshot"."issue_id" = "issue"."id"
-              AND "snapshot"."event" = "issue"."latest_snapshot_event"
-              AND "snapshot"."member_id" = "opinion"."member_id"
-              WHERE "issue"."id" = "issue_id_p"
-              AND "opinion"."suggestion_id" = "suggestion_id_v"
-              AND "opinion"."degree" = -1
-              AND "opinion"."fulfilled" = FALSE
-            ),
-            "minus1_fulfilled_count" = (
-              SELECT coalesce(sum("snapshot"."weight"), 0)
-              FROM "issue" CROSS JOIN "opinion"
-              JOIN "direct_interest_snapshot" AS "snapshot"
-              ON "snapshot"."issue_id" = "issue"."id"
-              AND "snapshot"."event" = "issue"."latest_snapshot_event"
-              AND "snapshot"."member_id" = "opinion"."member_id"
-              WHERE "issue"."id" = "issue_id_p"
-              AND "opinion"."suggestion_id" = "suggestion_id_v"
-              AND "opinion"."degree" = -1
-              AND "opinion"."fulfilled" = TRUE
-            ),
-            "plus1_unfulfilled_count" = (
-              SELECT coalesce(sum("snapshot"."weight"), 0)
-              FROM "issue" CROSS JOIN "opinion"
-              JOIN "direct_interest_snapshot" AS "snapshot"
-              ON "snapshot"."issue_id" = "issue"."id"
-              AND "snapshot"."event" = "issue"."latest_snapshot_event"
-              AND "snapshot"."member_id" = "opinion"."member_id"
-              WHERE "issue"."id" = "issue_id_p"
-              AND "opinion"."suggestion_id" = "suggestion_id_v"
-              AND "opinion"."degree" = 1
-              AND "opinion"."fulfilled" = FALSE
-            ),
-            "plus1_fulfilled_count" = (
-              SELECT coalesce(sum("snapshot"."weight"), 0)
-              FROM "issue" CROSS JOIN "opinion"
-              JOIN "direct_interest_snapshot" AS "snapshot"
-              ON "snapshot"."issue_id" = "issue"."id"
-              AND "snapshot"."event" = "issue"."latest_snapshot_event"
-              AND "snapshot"."member_id" = "opinion"."member_id"
-              WHERE "issue"."id" = "issue_id_p"
-              AND "opinion"."suggestion_id" = "suggestion_id_v"
-              AND "opinion"."degree" = 1
-              AND "opinion"."fulfilled" = TRUE
-            ),
-            "plus2_unfulfilled_count" = (
-              SELECT coalesce(sum("snapshot"."weight"), 0)
-              FROM "issue" CROSS JOIN "opinion"
-              JOIN "direct_interest_snapshot" AS "snapshot"
-              ON "snapshot"."issue_id" = "issue"."id"
-              AND "snapshot"."event" = "issue"."latest_snapshot_event"
-              AND "snapshot"."member_id" = "opinion"."member_id"
-              WHERE "issue"."id" = "issue_id_p"
-              AND "opinion"."suggestion_id" = "suggestion_id_v"
-              AND "opinion"."degree" = 2
-              AND "opinion"."fulfilled" = FALSE
-            ),
-            "plus2_fulfilled_count" = (
-              SELECT coalesce(sum("snapshot"."weight"), 0)
-              FROM "issue" CROSS JOIN "opinion"
-              JOIN "direct_interest_snapshot" AS "snapshot"
-              ON "snapshot"."issue_id" = "issue"."id"
-              AND "snapshot"."event" = "issue"."latest_snapshot_event"
-              AND "snapshot"."member_id" = "opinion"."member_id"
-              WHERE "issue"."id" = "issue_id_p"
-              AND "opinion"."suggestion_id" = "suggestion_id_v"
-              AND "opinion"."degree" = 2
-              AND "opinion"."fulfilled" = TRUE
+      IF "persist" ISNULL THEN
+        SELECT * INTO "issue_row" FROM "issue" WHERE "id" = "issue_id_p"
+          FOR UPDATE;
+        IF "issue_row"."closed" NOTNULL THEN
+          RETURN NULL;
+        END IF;
+        "persist"."state" := "issue_row"."state";
+        IF
+          ( "issue_row"."state" = 'admission' AND now() >=
+            "issue_row"."created" + "issue_row"."admission_time" ) OR
+          ( "issue_row"."state" = 'discussion' AND now() >=
+            "issue_row"."accepted" + "issue_row"."discussion_time" ) OR
+          ( "issue_row"."state" = 'verification' AND now() >=
+            "issue_row"."half_frozen" + "issue_row"."verification_time" ) OR
+          ( "issue_row"."state" = 'voting' AND now() >=
+            "issue_row"."fully_frozen" + "issue_row"."voting_time" )
+        THEN
+          "persist"."phase_finished" := TRUE;
+        ELSE
+          "persist"."phase_finished" := FALSE;
+        END IF;
+        IF
+          NOT EXISTS (
+            -- all initiatives are revoked
+            SELECT NULL FROM "initiative"
+            WHERE "issue_id" = "issue_id_p" AND "revoked" ISNULL
+          ) AND (
+            -- and issue has not been accepted yet
+            "persist"."state" = 'admission' OR
+            -- or verification time has elapsed
+            ( "persist"."state" = 'verification' AND
+              "persist"."phase_finished" ) OR
+            -- or no initiatives have been revoked lately
+            NOT EXISTS (
+              SELECT NULL FROM "initiative"
+              WHERE "issue_id" = "issue_id_p"
+              AND now() < "revoked" + "issue_row"."verification_time"
             )
-            WHERE "suggestion"."id" = "suggestion_id_v";
-        END LOOP;
-        FOR "argument_id_v", "side_v" IN
-          SELECT "id", "side" FROM "argument"
-          WHERE "initiative_id" = "initiative_id_v"
-        LOOP
-          IF "side_v" = 'pro' THEN
-            -- count only ratings by supporters
-            UPDATE "argument" SET
-              "plus_count"  = "subquery"."plus_count",
-              "minus_count" = "subquery"."minus_count"
-            FROM (
-              SELECT
-                COUNT(CASE WHEN "rating"."negative" = FALSE THEN 1 ELSE NULL END) AS "plus_count",
-                COUNT(CASE WHEN "rating"."negative" = TRUE  THEN 1 ELSE NULL END) AS "minus_count"
-              FROM "issue" CROSS JOIN "rating"
-              JOIN "direct_supporter_snapshot" AS "snapshot"
-                ON "snapshot"."initiative_id" = "rating"."initiative_id"
-                AND "snapshot"."event" = "issue"."latest_snapshot_event"
-                AND "snapshot"."member_id" = "rating"."member_id"
-              WHERE "issue"."id" = "issue_id_p"
-                AND "rating"."argument_id" = "argument_id_v"
-            ) AS "subquery"
-            WHERE "argument"."id" = "argument_id_v";
-          ELSE
-            -- count only ratings by non-supporters
-            UPDATE "argument" SET
-              "plus_count"  = "subquery"."plus_count",
-              "minus_count" = "subquery"."minus_count"
-            FROM (
-              SELECT
-                COUNT(CASE WHEN "rating"."negative" = FALSE THEN 1 ELSE NULL END) AS "plus_count",
-                COUNT(CASE WHEN "rating"."negative" = TRUE  THEN 1 ELSE NULL END) AS "minus_count"
-              FROM "issue" CROSS JOIN "rating"
-              LEFT JOIN "direct_supporter_snapshot" AS "snapshot"
-                ON "snapshot"."initiative_id" = "rating"."initiative_id"
-                AND "snapshot"."event" = "issue"."latest_snapshot_event"
-                AND "snapshot"."member_id" = "rating"."member_id"
-              WHERE "issue"."id" = "issue_id_p"
-                AND "rating"."argument_id" = "argument_id_v"
-                AND "snapshot"."member_id" IS NULL
-            ) AS "subquery"
-            WHERE "argument"."id" = "argument_id_v";
+          )
+        THEN
+          "persist"."issue_revoked" := TRUE;
+        ELSE
+          "persist"."issue_revoked" := FALSE;
+        END IF;
+        IF "persist"."phase_finished" OR "persist"."issue_revoked" THEN
+          UPDATE "issue" SET "phase_finished" = now()
+            WHERE "id" = "issue_row"."id";
+          RETURN "persist";
+        ELSIF
+          "persist"."state" IN ('admission', 'discussion', 'verification')
+        THEN
+          RETURN "persist";
+        ELSE
+          RETURN NULL;
+        END IF;
+      END IF;
+      IF
+        "persist"."state" IN ('admission', 'discussion', 'verification') AND
+        coalesce("persist"."snapshot_created", FALSE) = FALSE
+      THEN
+        PERFORM "create_snapshot"("issue_id_p");
+        "persist"."snapshot_created" = TRUE;
+        IF "persist"."phase_finished" THEN
+          IF "persist"."state" = 'admission' THEN
+            PERFORM "set_snapshot_event"("issue_id_p", 'end_of_admission');
+          ELSIF "persist"."state" = 'discussion' THEN
+            PERFORM "set_snapshot_event"("issue_id_p", 'half_freeze');
+          ELSIF "persist"."state" = 'verification' THEN
+            PERFORM "set_snapshot_event"("issue_id_p", 'full_freeze');
+            SELECT * INTO "issue_row" FROM "issue" WHERE "id" = "issue_id_p";
+            SELECT * INTO "policy_row" FROM "policy"
+              WHERE "id" = "issue_row"."policy_id";
+            FOR "initiative_row" IN
+              SELECT * FROM "initiative"
+              WHERE "issue_id" = "issue_id_p" AND "revoked" ISNULL
+              FOR UPDATE
+            LOOP
+              IF
+                "initiative_row"."polling" OR (
+                  "initiative_row"."satisfied_supporter_count" > 0 AND
+                  "initiative_row"."satisfied_supporter_count" *
+                  "policy_row"."initiative_quorum_den" >=
+                  "issue_row"."population" * "policy_row"."initiative_quorum_num"
+                )
+              THEN
+                UPDATE "initiative" SET "admitted" = TRUE
+                  WHERE "id" = "initiative_row"."id";
+              ELSE
+                UPDATE "initiative" SET "admitted" = FALSE
+                  WHERE "id" = "initiative_row"."id";
+              END IF;
+            END LOOP;
           END IF;
-        END LOOP;
-      END LOOP;
-      RETURN;
+        END IF;
+        RETURN "persist";
+      END IF;
+      IF
+        "persist"."state" IN ('admission', 'discussion', 'verification') AND
+        coalesce("persist"."harmonic_weights_set", FALSE) = FALSE
+      THEN
+        PERFORM "set_harmonic_initiative_weights"("issue_id_p");
+        "persist"."harmonic_weights_set" = TRUE;
+        IF
+          "persist"."phase_finished" OR
+          "persist"."issue_revoked" OR
+          "persist"."state" = 'admission'
+        THEN
+          RETURN "persist";
+        ELSE
+          RETURN NULL;
+        END IF;
+      END IF;
+      IF "persist"."issue_revoked" THEN
+        IF "persist"."state" = 'admission' THEN
+          "state_v" := 'canceled_revoked_before_accepted';
+        ELSIF "persist"."state" = 'discussion' THEN
+          "state_v" := 'canceled_after_revocation_during_discussion';
+        ELSIF "persist"."state" = 'verification' THEN
+          "state_v" := 'canceled_after_revocation_during_verification';
+        END IF;
+        UPDATE "issue" SET
+          "state"          = "state_v",
+          "closed"         = "phase_finished",
+          "phase_finished" = NULL
+          WHERE "id" = "issue_id_p";
+        RETURN NULL;
+      END IF;
+      IF "persist"."state" = 'admission' THEN
+        SELECT * INTO "issue_row" FROM "issue" WHERE "id" = "issue_id_p"
+          FOR UPDATE;
+        SELECT * INTO "policy_row"
+          FROM "policy" WHERE "id" = "issue_row"."policy_id";
+        IF EXISTS (
+          SELECT NULL FROM "initiative"
+          WHERE "issue_id" = "issue_id_p"
+          AND "satisfied_supporter_count" > 0
+          AND "satisfied_supporter_count" * "policy_row"."issue_quorum_den"
+          >= "issue_row"."population" * "policy_row"."issue_quorum_num"
+        ) THEN
+          UPDATE "issue" SET
+            "state"          = 'discussion',
+            "accepted"       = coalesce("phase_finished", now()),
+            "phase_finished" = NULL
+            WHERE "id" = "issue_id_p";
+        ELSIF "issue_row"."phase_finished" NOTNULL THEN
+          UPDATE "issue" SET
+            "state"          = 'canceled_issue_not_accepted',
+            "closed"         = "phase_finished",
+            "phase_finished" = NULL
+            WHERE "id" = "issue_id_p";
+        END IF;
+        RETURN NULL;
+      END IF;
+      IF "persist"."phase_finished" THEN
+        if "persist"."state" = 'discussion' THEN
+          UPDATE "issue" SET
+            "state"          = 'verification',
+            "half_frozen"    = "phase_finished",
+            "phase_finished" = NULL
+            WHERE "id" = "issue_id_p";
+          RETURN NULL;
+        END IF;
+        IF "persist"."state" = 'verification' THEN
+          SELECT * INTO "issue_row" FROM "issue" WHERE "id" = "issue_id_p"
+            FOR UPDATE;
+          SELECT * INTO "policy_row" FROM "policy"
+            WHERE "id" = "issue_row"."policy_id";
+          IF EXISTS (
+            SELECT NULL FROM "initiative"
+            WHERE "issue_id" = "issue_id_p" AND "admitted" = TRUE
+          ) THEN
+            UPDATE "issue" SET
+              "state"          = 'voting',
+              "fully_frozen"   = "phase_finished",
+              "phase_finished" = NULL
+              WHERE "id" = "issue_id_p";
+          ELSE
+            UPDATE "issue" SET
+              "state"          = 'canceled_no_initiative_admitted',
+              "fully_frozen"   = "phase_finished",
+              "closed"         = "phase_finished",
+              "phase_finished" = NULL
+              WHERE "id" = "issue_id_p";
+            -- NOTE: The following DELETE statements have effect only when
+            --       issue state has been manipulated
+            DELETE FROM "direct_voter"     WHERE "issue_id" = "issue_id_p";
+            DELETE FROM "delegating_voter" WHERE "issue_id" = "issue_id_p";
+            DELETE FROM "battle"           WHERE "issue_id" = "issue_id_p";
+          END IF;
+          RETURN NULL;
+        END IF;
+        IF "persist"."state" = 'voting' THEN
+          IF coalesce("persist"."closed_voting", FALSE) = FALSE THEN
+            PERFORM "close_voting"("issue_id_p");
+            "persist"."closed_voting" = TRUE;
+            RETURN "persist";
+          END IF;
+          PERFORM "calculate_ranks"("issue_id_p");
+          RETURN NULL;
+        END IF;
+      END IF;
+      RAISE WARNING 'should not happen';
+      RETURN NULL;
     END;
   $$;
 
