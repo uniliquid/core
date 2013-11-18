@@ -3634,7 +3634,6 @@ CREATE FUNCTION "create_snapshot"
             AND "di"."event" = 'periodic'
             AND "ds"."initiative_id" = "initiative_id_v"
             AND "ds"."event" = 'periodic'
-            AND "ds"."satisfied"
           ),
           "informed_supporter_count" = (
             SELECT coalesce(sum("di"."weight"), 0)
@@ -4544,8 +4543,8 @@ CREATE FUNCTION "check_issue"
         IF EXISTS (
           SELECT NULL FROM "initiative"
           WHERE "issue_id" = "issue_id_p"
-          AND "supporter_count" > 0
-          AND "supporter_count" * "policy_row"."issue_quorum_den"
+          AND "satisfied_supporter_count" > 0
+          AND "satisfied_supporter_count" * "policy_row"."issue_quorum_den"
           >= "issue_row"."population" * "policy_row"."issue_quorum_num"
         ) THEN
           UPDATE "issue" SET
