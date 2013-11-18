@@ -3634,6 +3634,7 @@ CREATE FUNCTION "create_snapshot"
             AND "di"."event" = 'periodic'
             AND "ds"."initiative_id" = "initiative_id_v"
             AND "ds"."event" = 'periodic'
+            AND "ds"."satisfied"
           ),
           "informed_supporter_count" = (
             SELECT coalesce(sum("di"."weight"), 0)
