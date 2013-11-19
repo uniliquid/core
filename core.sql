@@ -643,8 +643,10 @@ CREATE TABLE "initiative" (
         "suggested_initiative_id" INT4          REFERENCES "initiative" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
         "admitted"              BOOLEAN,
         "supporter_count"                    INT4,
+        "direct_supporter_count"             INT4,
         "informed_supporter_count"           INT4,
         "satisfied_supporter_count"          INT4,
+        "satisfied_direct_supporter_count"   INT4,
         "satisfied_informed_supporter_count" INT4,
         "harmonic_weight"       NUMERIC(12, 3),
         "final_suggestion_order_calculated" BOOLEAN NOT NULL DEFAULT FALSE,
@@ -703,7 +705,9 @@ COMMENT ON COLUMN "initiative"."revoked"                IS 'Point in time, when 
 COMMENT ON COLUMN "initiative"."revoked_by_member_id"   IS 'Member, who decided to revoke the initiative';
 COMMENT ON COLUMN "initiative"."admitted"               IS 'TRUE, if initiative reaches the "initiative_quorum" when freezing the issue';
 COMMENT ON COLUMN "initiative"."supporter_count"                    IS 'Calculated from table "direct_supporter_snapshot"';
+COMMENT ON COLUMN "initiative"."direct_supporter_count"             IS 'Calculated from table "direct_supporter_snapshot"';
 COMMENT ON COLUMN "initiative"."informed_supporter_count"           IS 'Calculated from table "direct_supporter_snapshot"';
+COMMENT ON COLUMN "initiative"."satisfied_direct_supporter_count"   IS 'Calculated from table "direct_supporter_snapshot"';
 COMMENT ON COLUMN "initiative"."satisfied_supporter_count"          IS 'Calculated from table "direct_supporter_snapshot"';
 COMMENT ON COLUMN "initiative"."satisfied_informed_supporter_count" IS 'Calculated from table "direct_supporter_snapshot"';
 COMMENT ON COLUMN "initiative"."harmonic_weight"        IS 'Indicates the relevancy of the initiative, calculated from the potential supporters weighted with the harmonic series to avoid a large number of clones affecting other initiative''s sorting positions too much; shall be used as secondary sorting key after "admitted" as primary sorting key';
@@ -3635,6 +3639,17 @@ CREATE FUNCTION "create_snapshot"
             AND "ds"."initiative_id" = "initiative_id_v"
             AND "ds"."event" = 'periodic'
           ),
+          "direct_supporter_count" = (
+            SELECT coalesce(count("di"."weight"), 0)
+            FROM "direct_interest_snapshot" AS "di"
+            JOIN "direct_supporter_snapshot" AS "ds"
+            ON "di"."member_id" = "ds"."member_id"
+            WHERE "di"."issue_id" = "issue_id_p"
+            AND "di"."event" = 'periodic'
+            AND "ds"."initiative_id" = "initiative_id_v"
+            AND "ds"."event" = 'periodic'
+            AND "di"."weight" > 0 -- otherwise users with no weight could be counted
+          ),
           "informed_supporter_count" = (
             SELECT coalesce(sum("di"."weight"), 0)
             FROM "direct_interest_snapshot" AS "di"
@@ -3656,6 +3671,18 @@ CREATE FUNCTION "create_snapshot"
             AND "ds"."initiative_id" = "initiative_id_v"
             AND "ds"."event" = 'periodic'
             AND "ds"."satisfied"
+          ),
+          "satisfied_direct_supporter_count" = (
+            SELECT coalesce(count("di"."weight"), 0)
+            FROM "direct_interest_snapshot" AS "di"
+            JOIN "direct_supporter_snapshot" AS "ds"
+            ON "di"."member_id" = "ds"."member_id"
+            WHERE "di"."issue_id" = "issue_id_p"
+            AND "di"."event" = 'periodic'
+            AND "ds"."initiative_id" = "initiative_id_v"
+            AND "ds"."event" = 'periodic'
+            AND "ds"."satisfied"
+            AND "di"."weight" > 0 -- otherwise users with no weight could be counted
           ),
           "satisfied_informed_supporter_count" = (
             SELECT coalesce(sum("di"."weight"), 0)
