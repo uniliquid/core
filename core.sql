@@ -4362,26 +4362,22 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
           LIMIT 1
         ) AS "subquery"
         WHERE "id" = "subquery"."initiative_id";
-      -- write (final) ranks:
---      "rank_v" := 1;
---      FOR "initiative_id_v" IN
---        SELECT "id"
---        FROM "initiative"
---        WHERE "issue_id" = "issue_id_p" AND "admitted"
---        ORDER BY
---          "winner" DESC,
---          "eligible" DESC,
---          "schulze_rank",
---          "id"
---      LOOP
---        UPDATE "initiative" SET "rank" = "rank_v"
---          WHERE "id" = "initiative_id_v";
---        "rank_v" := "rank_v" + 1;
---      END LOOP;
       -- write final ranks which should be equal(!) to schulze ranks (this behaviour differs from the one liquid feedback has implemented):
-      UPDATE "initiative" SET
-        "rank" = "schulze_rank"
-        WHERE "issue_id" = "issue_id_p" AND "admitted";
+      "rank_v" := 1;
+      FOR "initiative_id_v" IN
+        SELECT "id"
+        FROM "initiative"
+        WHERE "issue_id" = "issue_id_p" AND "admitted"
+        ORDER BY
+          "schulze_rank",
+          "winner" DESC,
+          "eligible" DESC,
+          "id"
+      LOOP
+        UPDATE "initiative" SET "rank" = "rank_v"
+          WHERE "id" = "initiative_id_v";
+        "rank_v" := "rank_v" + 1;
+      END LOOP;
       -- set schulze rank of status quo and mark issue as finished:
       UPDATE "issue" SET
         "status_quo_schulze_rank" = "rank_ary"["dimension_v"],
