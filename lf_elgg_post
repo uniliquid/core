@@ -1,0 +1,76 @@
+#!/bin/bash
+exit -2
+echo "elgg post" >> /var/log/lqfb/notification.log
+echo `date` >> /var/log/lqfb/notification.log
+area=`awk 'NR==1' /tmp/lqfb_notification.txt`
+case $area in
+*)
+   fid=528;;
+#   echo "Unknown area id: $area" >> /var/log/lqfb/notification.log
+#   exit -2
+esac
+ltid=`awk 'NR==2' /tmp/lqfb_notification.txt`
+
+newline=`zsh -c echo "\\n"`
+subject=`awk 'NR==3' /tmp/lqfb_notification.txt`
+data=`awk 'NR>3' /tmp/lqfb_notification.txt | sed "s/^ *//;s/ *$//;s/ \{1,\}/ /g"`
+
+#data=${data//<p>/$newline}
+#data=${data//<\/p>/$newline}
+#data=${data//<a href=\"/[url=}
+#data=${data//\">/]}
+#data=${data//<\/a>/[\/url]}
+#data=${data//<br\/>/$newline}
+#data=${data//<br \/>/$newline}
+#data=${data//&nbsp;/ }
+#data=${data//&quot;/\"}
+#data=${data//\[spoiler\]\[\/spoiler\]/}
+#data=${data//</[}
+#data=${data//>/]}
+#data=${data//\'/\\\'}
+#data=${data//$/\\$}
+#
+#subject=${subject//&nbsp;/ }
+#subject=${subject//&quot;/\"}
+#subject=${subject//</[}
+#subject=${subject//>/]}
+#subject=${subject//\'/\\\'}
+#subject=${subject//$/\\$}
+#
+if [ ${#data} -lt 5 ]; then
+  data="Leider ist ein Fehler aufgetreten. Ich teile euch immerhin trotzdem mit, dass etwas passiert ist! ;)"
+fi
+data=`echo "<?php echo urlencode('$data'); ?>" | php5-cgi -q`
+#
+#tid=`echo "SELECT forum FROM elgg_map WHERE lqfb=$ltid LIMIT 1;" | psql -AqSt lfbot`
+#
+password=`awk 'NR==1' /opt/liquid_feedback_core/forum_password.txt`
+
+loginform=`curl --ssl "https://elgg.piratenpartei.at/login" -c /tmp/elgg_cookies.txt | tr -d '\r\n' | grep -Po "\"__elgg_token.*" | head -n 1`
+elgg_token=`echo $loginform | grep -E "__elgg_token\" value=\"\w+\"" -o | grep -E "value=.*" -o | grep -E "\".*\"" -o | grep -E "\w+" -o`
+elgg_ts=`echo $loginform | grep -E "__elgg_ts\" value=\"\w+\"" -o | grep -E "value=.*" -o | grep -E "\".*\"" -o | grep -E "\w+" -o`
+curl -v --ssl -b /tmp/elgg_cookies.txt -H "DNT: 0" -d "elgg_token=$elgg_token&elgg_ts=$elgg_ts&username=Liquid&password=$password&persistent=false&returntoreferer=true" -e "https://elgg.piratenpartei.at/login" "https://elgg.piratenpartei.at/action/login" -c /tmp/elgg_cookies.txt
+#if ( [ "${#tid}" -gt 0 ] && [ "$tid" -gt 0 ] ); then
+#  echo "well this is $tid"
+#  constants=`curl --ssl --no-progress-bar -b /tmp/forum_cookies.txt -c /tmp/forum_cookies.txt "https://forum.piratenpartei.at/newreply.php?tid=$tid" 2>/dev/null | grep -E "name=\"(my_post_key|posthash)"`
+#  my_post_key=`echo $constants | grep -E "name=\"my_post_key\" value=\"\w+\"" -o`
+#  my_post_key=${my_post_key:(26):(32)}
+#  posthash=`echo $constants | grep -E "name=\"posthash\" value=\"\w+\"" -o`
+#  posthash=${posthash:(23):(32)}
+#  subject="RE: ${subject:(0):(81)}"
+#  subject=`echo "<?php echo urlencode('$subject'); ?>" | php5-cgi -q`
+#  curl --ssl -H "Expect:" -b /tmp/forum_cookies.txt -d "my_post_key=$my_post_key&subject=$subject&message=$data&submit=Antwort absenden&action=do_newreply&posthash=$posthash&tid=$tid" "https://forum.piratenpartei.at/newreply.php?tid=$tid&processed=1"
+#else
+  echo "new post yay"
+  constants=`curl --ssl -b /tmp/elgg_cookies.txt -c /tmp/elgg_cookies.txt "https://elgg.piratenpartei.at/blog/add/$fid" 2>/dev/null | grep -Po "\"__elgg_token.*" | head -n 1`
+  elgg_token=`echo $loginform | grep -E "__elgg_token\" value=\"\w+\"" -o | grep -E "value=.*" -o | grep -E "\".*\"" -o | grep -E "\w+" -o`
+  elgg_ts=`echo $loginform | grep -E "__elgg_ts\" value=\"\w+\"" -o | grep -E "value=.*" -o | grep -E "\".*\"" -o | grep -E "\w+" -o`
+  subject=`echo "<?php echo urlencode('$subject'); ?>" | php5-cgi -q`
+  curl -v --ssl -H "Expect:" -vs -b /tmp/elgg_cookies.txt -d "elgg_token=$elgg_token&elgg_ts=$elgg_ts&title=$subject&excerpt=&description=$data&blog_tags=&universal_category_marker=on&comments_on=On&access_id=2&status=published&guid=&container_guid=$fid&save=Save" "https://elgg.piratenpartei.at/action/blog/save"
+#  tid=`grep Location: /tmp/forum_request.txt | grep -o -E "thread-[0-9]+" | grep -o -E "[0-9]+"`
+#  if ( [ "${#tid}" -gt 0 ] && [ "$tid" -gt 0 ] ); then
+#    echo "INSERT INTO map (lqfb,forum) VALUES ($ltid,$tid);" | psql -AqSt lfbot
+#  fi
+#fi
+#rm -f /tmp/forum_cookies.txt /tmp/forum_request.txt
+#echo "forum post done" >> /var/log/lqfb/notification.log

@@ -1,0 +1,47 @@
+#!/bin/bash
+echo "reddit post" >> /var/log/lqfb/notification.log
+echo `date` >> /var/log/lqfb/notification.log
+area=`awk 'NR==1' /tmp/lqfb_notification.txt`
+#case $area in
+#"1")
+   fid="Allgemein";
+#   fid=76;;
+#*)
+#   echo "Unknown area id: $area" >> /var/log/lqfb/notification.log
+#   exit -2
+#esac
+ltid=`awk 'NR==2' /tmp/lqfb_notification.txt`
+
+subject=`awk 'NR==3' /tmp/lqfb_notification.txt`
+data=`awk 'NR>3' /tmp/lqfb_notification.txt | sed "s/^ *//;s/ *$//;s/ \{1,\}/ /g"`
+
+subject=${subject//&nbsp;/ }
+subject=${subject//&quot;/\"}
+subject=${subject//\'/\\\'}
+subject=${subject//$/\\$}
+
+if [ ${#data} -lt 5 ]; then
+  data="Leider ist ein Fehler aufgetreten. Ich teile euch immerhin trotzdem mit, dass etwas passiert ist! ;)"
+fi
+data=`php5-cgi -q /opt/liquid_feedback_core/redditencode.php`
+
+tid=`echo "SELECT forum FROM reddit_map WHERE lqfb=$ltid LIMIT 1;" | psql -AqSt lfbot`
+
+password=`awk 'NR==1' /opt/liquid_feedback_core/reddit_password.txt`
+subject=`echo "<?php echo urlencode('$subject'); ?>" | php5-cgi -q`
+fid=`echo "<?php echo urlencode('$fid'); ?>" | php5-cgi -q`
+curl --ssl -b /tmp/reddit_cookies.txt -H "Expect:" -d "api_type=json&user=Liquid&passwd=$password" "https://reddit.piratenpartei.at/api/login" -c /tmp/reddit_cookies.txt 2>/dev/null 1>/dev/null
+if ( [ "${#tid}" -gt 0 ] && [ "$tid" != "0" ] ); then
+  echo "well this is $tid"
+  curl --ssl -X POST -u "Liquid:$password" -H "Expect:" -vs -b /tmp/reddit_cookies.txt -d "api_type=json&text=$data&uh=Liquid&thing_id=t6_$tid" "https://reddit.piratenpartei.at/api/comment" 1>/tmp/reddit_request.txt 2>/dev/null
+else
+  echo "new post yay"
+  curl --ssl -X POST -u "Liquid:$password" -H "Expect:" -vs -b /tmp/reddit_cookies.txt -d "api_type=json&kind=self&save=true&sr=$fid&text=$data&title=$subject&extension=json&then=comments&uh=Liquid&r=$fid&resubmit=true&sendreplies=false" "https://reddit.piratenpartei.at/api/submit" 1>/tmp/reddit_request.txt 2>/dev/null
+  tid=`grep -o -E ".json\", \"id\": \"[A-Za-z0-9]+\"," /tmp/reddit_request.txt | grep -o -E ": \"[A-Za-z0-9]+\"" | grep -o -E "[A-Za-z0-9]+"`
+  echo $tid
+  if ( [ "${#tid}" -gt 0 ] && [ "$tid" != "0" ] ); then
+    echo "INSERT INTO reddit_map (lqfb,forum) VALUES ($ltid,'$tid');" | psql -AqSt lfbot
+  fi
+fi
+rm -f /tmp/reddit_cookies.txt /tmp/reddit_request.txt
+echo "reddit post done" >> /var/log/lqfb/notification.log
