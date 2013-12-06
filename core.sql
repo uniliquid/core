@@ -4855,5 +4855,12 @@ CREATE SEQUENCE auto_freeze_id_seq
     NO MINVALUE
     CACHE 1;
 
+CREATE OR REPLACE FUNCTION unifyName("name" TEXT)
+  RETURNS TEXT
+  LANGUAGE 'plpgsql' VOLATILE AS $$
+    BEGIN
+      RETURN lower(replace(replace(replace(replace(replace(replace(replace(replace("name",'1','l'),'4','A'),'i','l'),'5','S'),'8','B'),'i','j'),'-',' '),'0','O'));
+    END;
+  $$;
 
 COMMIT;
