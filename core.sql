@@ -2300,7 +2300,7 @@ CREATE VIEW "battle_view" AS
   LEFT JOIN "vote" AS "worse_vote"
     ON "direct_voter"."member_id" = "worse_vote"."member_id"
     AND "losing_initiative"."id" = "worse_vote"."initiative_id"
-  WHERE "issue"."state" = 'voting
+  WHERE "issue"."state" = 'voting'
   AND (
     "winning_initiative"."id" != "losing_initiative"."id" OR
     ( ("winning_initiative"."id" NOTNULL AND "losing_initiative"."id" ISNULL) OR
@@ -3567,7 +3567,6 @@ CREATE FUNCTION "create_interest_snapshot"
             )
           WHERE "issue_id" = "issue_id_p"
           AND "event" = 'periodic';
-      END LOOP;
       INSERT INTO "direct_supporter_snapshot"
         ( "issue_id", "initiative_id", "event", "member_id",
           "draft_id", "informed", "satisfied" )
