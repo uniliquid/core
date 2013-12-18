@@ -13,7 +13,7 @@
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="lf_notification"
 NAME=lf_notification
-DAEMON=/opt/liquid_feedback_core/lf_notification_loop
+DAEMON=/opt/uniliquid_core/lf_notification_loop
 DAEMON_ARGS=""
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
