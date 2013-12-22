@@ -4354,9 +4354,8 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
         FROM (
           SELECT "id" AS "initiative_id"
           FROM "initiative"
-          WHERE "issue_id" = "issue_id_p" AND "eligible"
+          WHERE "issue_id" = "issue_id_p" AND "eligible" AND "schulze_rank" = 1
           ORDER BY
-            "schulze_rank",
             "id"
           LIMIT 1
         ) AS "subquery"
