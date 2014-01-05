@@ -13,7 +13,7 @@
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="lf_updated"
 NAME=lf_updated
-DAEMON=/opt/liquid_feedback_core/lf_updated
+DAEMON=/opt/uniliquid_core/lf_updated
 DAEMON_ARGS=""
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
