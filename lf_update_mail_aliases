@@ -1,0 +1,5 @@
+#!/bin/bash
+
+su www-data -c "php5-cgi -q /opt/liquid_feedback_core/mailaliases.php" > /etc/aliases
+postalias /etc/aliases
+
