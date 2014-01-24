@@ -1,0 +1,109 @@
+diff --git a/bin/langtool.lua b/bin/langtool.lua
+index 3874195..91a522b 100755
+--- a/bin/langtool.lua
++++ b/bin/langtool.lua
+@@ -123,9 +123,7 @@ for num, directory in ipairs(directories) do
+ end
+ 
+ local function update_translation(key, value)
+-  if #directories > 0 then
+-    if translations[key] ~= nil then translations[key] = value end
+-  else
++  if translations[key] ~= nil or value ~= false then
+     translations[key] = value
+   end
+ end
+diff --git a/env/encode/mime/unstructured_header_line.lua b/env/encode/mime/unstructured_header_line.lua
+index 3dd65d7..016f5c0 100644
+--- a/env/encode/mime/unstructured_header_line.lua
++++ b/env/encode/mime/unstructured_header_line.lua
+@@ -39,6 +39,7 @@ function encode.mime.unstructured_header_line(key, value)
+   local open = false
+   for char in string.gmatch(value, ".") do
+     local encoded_char
++    local continuation_bytes = 0
+     if string.find(char, "^[0-9A-Za-z%.%-]$") then
+       encoded_char = char
+     else
+@@ -47,9 +48,17 @@ function encode.mime.unstructured_header_line(key, value)
+         encoded_char = "_"
+       else
+         encoded_char = string.format("=%02X", byte)
++        -- avoid line breaks within UTF-8 multibyte characters
++        if byte >= 240 then
++          continuation_bytes = 3
++        elseif byte >= 224 then
++          continuation_bytes = 2
++        elseif byte >= 192 then
++          continuation_bytes = 1
++        end
+       end
+     end
+-    if open and line_length + #encoded_char > 76 then
++    if open and line_length + #encoded_char + continuation_bytes * 3 > 76 then
+       parts[#parts+1] = closing
+       parts[#parts+1] = "\r\n"
+       parts[#parts+1] = indentation
+diff --git a/env/format/percentage.lua b/env/format/percentage.lua
+index 186c9ce..046f4d6 100644
+--- a/env/format/percentage.lua
++++ b/env/format/percentage.lua
+@@ -30,6 +30,6 @@ function format.percentage(value, options)
+   if options.decimal_shift == true then
+     options.decimal_shift = options.precision + 2
+   end
+-  local suffix = options.hide_unit and "" or " %"
++  local suffix = options.hide_unit and "" or "%"
+   return format.decimal(f * 100, options) .. suffix
+ end
+diff --git a/env/ui/field/boolean.lua b/env/ui/field/boolean.lua
+index 51d2cd6..58f0610 100644
+--- a/env/ui/field/boolean.lua
++++ b/env/ui/field/boolean.lua
+@@ -53,7 +53,7 @@ function ui.field.boolean(args)
+       end
+       ui.container{
+         attr          = { class = "ui_radio_div" },
+-        label         = args.true_as or "Yes",  -- TODO: localize
++        label         = args.true_as or _"Yes",  -- TODO: localize
+         label_for     = attr.id,
+         label_attr    = { class = "ui_radio_label" },
+         content_first = true,
+diff --git a/env/ui/field/text.lua b/env/ui/field/text.lua
+index 2da9486..7105d7d 100644
+--- a/env/ui/field/text.lua
++++ b/env/ui/field/text.lua
+@@ -11,7 +11,9 @@ This function inserts a field for a text in the active slot. For description of
+ function ui.field.text(args)
+   ui.form_element(args, {fetch_value = true}, function(args)
+     local value_string = format.string(args.value, args.format_options)
+-    if args.readonly then
++    if args.rawreadonly then
++      ui.tag{ tag = args.tag, attr = args.attr, content = args.content }
++    elseif args.readonly then
+       ui.tag{ tag = args.tag, attr = args.attr, content = value_string }
+     else
+       local attr = table.new(args.attr)
+diff --git a/env/ui/submit.lua b/env/ui/submit.lua
+index 74ce8d4..2ce2c4e 100644
+--- a/env/ui/submit.lua
++++ b/env/ui/submit.lua
+@@ -2,7 +2,8 @@
+ ui.submit{
+   name  = name,   -- optional HTML name
+   value = value,  -- HTML value
+-  text  = value   -- text on button
++  text  = value,   -- text on button
++  attr  = attr    -- table of HTML attributes, e.g. { class = "hide" }
+ }
+ 
+ This function places a HTML form submit button in the active slot. Currently the text displayed on the button and the value attribute are the same, so specifying both a 'value' and a 'text' makes no sense.
+@@ -12,7 +13,7 @@ This function places a HTML form submit button in the active slot. Currently the
+ function ui.submit(args)
+   if slot.get_state_table().form_readonly == false then
+     local args = args or {}
+-    local attr = table.new(attr)
++    local attr = args.attr or {}
+     attr.type  = "submit"
+     attr.name  = args.name
+     attr.value = args.value or args.text
