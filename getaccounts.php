@@ -126,6 +126,7 @@ function updateRegions($lqfb_id, $lo_num, $ro1, $ro2, $min, $max)
 
 $decrypted = rtrim(mcrypt_decrypt(MCRYPT_RIJNDAEL_256, md5($datakey2), base64_decode($sData), MCRYPT_MODE_CBC, md5(md5($datakey2))), "\0");
 $lines = explode("\n",$decrypted);
+$i = 0;
 foreach ($lines as $line)
 {
   if (strlen($line) < 5) { continue; }
@@ -147,7 +148,9 @@ foreach ($lines as $line)
   $akk = ($values[5] != null);
   $paid = ($values[6] != null);
   if (!$akk || !$paid)
+  {
     continue;
+  }
   switch ($lo)
   {
     case 38: $lo_num = 6; break;
@@ -161,6 +164,7 @@ foreach ($lines as $line)
     case 37: $lo_num = 2; break;
     default: $lo_num = 0; break;
   }
+  $i++;
   //echo "insert: identification=$idc, email=$mail, lo=$lo_num, oo=$oo_num, akk=$akk, paid=$paid\n";
   $query = "SELECT id,notify_email FROM member WHERE identification='$idc'";
   $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
@@ -253,7 +257,7 @@ foreach ($lines as $line)
   updateRegions($lqfb_id, $lo_num, $oo[0], $oo[1], 11, 36);
 }
 
-$query = "SELECT id,identification,notify_email FROM member_update_copy WHERE locked != true AND admin_comment = 'member'";
+$query = "SELECT id,identification,notify_email FROM member_update_copy WHERE NOT locked AND admin_comment = 'member'";
 $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
 while ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
   $lqfb_id = $line["id"];
@@ -271,11 +275,11 @@ while ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
 
   echo "sent info locked to $lqfb_id\n";
   $notify_email = $line["notify_email"];
-  exec("./sendinfo_locked.sh $notify_email");
+  //exec("./sendinfo_locked.sh $notify_email");
 }
 pg_free_result($result);
 
-$query = "SELECT id,identification,notify_email FROM member_update_copy WHERE admin_comment != 'member' AND admin_comment != 'Austritt'";
+$query = "SELECT id,identification,notify_email FROM member_update_copy WHERE admin_comment ISNULL OR (admin_comment != 'member' AND admin_comment != 'Austritt')";
 $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
 while ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
   $lqfb_id = $line["id"];
@@ -301,12 +305,13 @@ while ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
 pg_free_result($result);
 
 
-$query = 'DROP TABLE member_update_copy';
+/*$query = 'DROP TABLE member_update_copy';
 $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
 pg_free_result($result);
-
+*/
 pg_close($dbconn);
 
+echo $i . " members\n";
 
 ?>
 
