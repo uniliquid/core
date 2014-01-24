@@ -275,7 +275,7 @@ while ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
 
   echo "sent info locked to $lqfb_id\n";
   $notify_email = $line["notify_email"];
-  //exec("./sendinfo_locked.sh $notify_email");
+  exec("./sendinfo_locked.sh $notify_email");
 }
 pg_free_result($result);
 
@@ -305,10 +305,10 @@ while ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
 pg_free_result($result);
 
 
-/*$query = 'DROP TABLE member_update_copy';
+$query = 'DROP TABLE member_update_copy';
 $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
 pg_free_result($result);
-*/
+
 pg_close($dbconn);
 
 echo $i . " members\n";
