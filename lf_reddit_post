@@ -1,5 +1,4 @@
 #!/bin/bash
-exit 0
 echo "reddit post" >> /var/log/lqfb/notification.log
 echo `date` >> /var/log/lqfb/notification.log
 area=`awk 'NR==1' /tmp/lqfb_notification.txt`

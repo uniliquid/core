@@ -1,0 +1,3 @@
+#!/bin/bash
+cd /opt/liquid_feedback_core
+php pullreddit.php $1 2>/dev/null 1>/dev/null
