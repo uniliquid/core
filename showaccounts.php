@@ -1,15 +1,17 @@
 <?
 require("constants.php");
 $sData = file_get_contents("https://mitglieder.piratenpartei.at/adm_api/adm1.php");
+$sDataR = explode("\n",trim($sData," \n"));
+$sData = $sDataR[1];
+$sha1sum = $sDataR[0];
 if (strlen($datakey1) == 0 || strlen($datakey2) == 0)
   die('Kein Passwort!');
-
-if (strlen($sData) < 1000)
-  die('Daten von Mitgliederverwaltung zu kurz!');
 
 $oo_nums = array("AT130" => 2, "AT221" => 11);
 
 $decrypted = rtrim(mcrypt_decrypt(MCRYPT_RIJNDAEL_256, md5($datakey2), base64_decode($sData), MCRYPT_MODE_CBC, md5(md5($datakey2))), "\0");
+if (sha1($decrypted) != $sha1sum)
+  die("Checksum mismatch!");
 $lines = explode("\n",$decrypted);
 foreach ($lines as $line)
 {
