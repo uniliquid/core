@@ -8,9 +8,17 @@ function printPosts($tid,&$i, &$posts, &$text)
   foreach ($posts as $post)
   {
     if ($post->data->author == 'Liquid')
+    {
+      if ($post->data->replies && $post->data->replies->data && $post->data->replies->data->children && count($post->data->replies->data->children) > 0)
+      {
+        $text .= '<li>';
+        printPosts($tid,$i,$post->data->replies->data->children,$text);
+        $text .= '</li>';
+      }
       continue;
+    }
     $i++;
-    $text .= '<li><b>'.$post->data->author.' (<a href="https://reddit.piratenpartei.at/comments/'.$tid.'#'.$post->data->id.'" target="_blank">Antworten</a>):</b> '.htmlspecialchars_decode($post->data->body_html);
+    $text .= '<li><b><a href="https://reddit.piratenpartei.at/comments/'.$tid.'#'.$post->data->id.'" target="_blank">'.$post->data->author.'</a>:</b> '.preg_replace('/^<div class="md"><p>(.*)<\/p>\n<\/div>$/','${1}',htmlspecialchars_decode($post->data->body_html));
     if ($post->data->replies)
       printPosts($tid,$i,$post->data->replies->data->children,$text);
     $text .= "</li>";
@@ -25,7 +33,7 @@ if (ereg("^[0-9]+$", $argv[1]))
 
   $dbconn = pg_connect("dbname=lfbot") or die('Verbindungsaufbau fehlgeschlagen: ' . pg_last_error());
 
-  $query = "SELECT forum FROM reddit_map WHERE lqfb = '" . $argv[1] . "' AND timestamp < NOW() - '30 minutes'::interval LIMIT 1;";
+  $query = "SELECT forum FROM reddit_map WHERE lqfb = '" . $argv[1] . "' AND timestamp < NOW() - '0 minutes'::interval LIMIT 1;";
   $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
   $tid = 0;
   if ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
@@ -68,6 +76,7 @@ $text
 </div>
 </div>
 END;
+echo $html;
 $html = pg_escape_string($html);
 $query = "UPDATE reddit_map SET timestamp = NOW() WHERE lqfb = '" . $argv[1] . "';";
 $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());

@@ -178,7 +178,7 @@ foreach ($lines as $line)
     $query = "SELECT active,notify_email FROM member WHERE identification='$idc' AND locked = true;";
     $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
     if ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
-      $active = $line["active"];
+      $active = ($line["active"] == 't') ? true : false;
       $query = "UPDATE member SET locked = false WHERE identification='$idc'";
       echo $query . "\n";
       $result2 = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
@@ -204,7 +204,7 @@ foreach ($lines as $line)
     // pg_free_result($result);
 
     // update mail address if user not active but mail address changed
-    $query = "SELECT notify_email,locked FROM member WHERE identification='$idc' AND active = FALSE";
+    $query = "SELECT notify_email,locked,login FROM member WHERE identification='$idc' AND NOT active";
     $result = pg_query($query) or die('Abfrage fehlgeschlagen: ' . pg_last_error());
     if ($line = pg_fetch_array($result, null, PGSQL_ASSOC)) {
       pg_free_result($result);
