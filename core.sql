@@ -904,7 +904,7 @@ CREATE TABLE "rendered_suggestion" (
         "format"                TEXT,
         "content"               TEXT            NOT NULL );
 
-COMMENT ON TABLE "rendered_suggestion" IS 'This table may be used by frontends to cache "rendered" drafts (e.g. HTML output generated from wiki text)';
+COMMENT ON TABLE "rendered_suggestion" IS 'This table may be used by frontends to cache "rendered" suggestions (e.g. HTML output generated from wiki text)';
 
 
 CREATE TABLE "suggestion_setting" (
