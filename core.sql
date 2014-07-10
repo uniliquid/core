@@ -7,7 +7,7 @@
 BEGIN;
 
 CREATE VIEW "liquid_feedback_version" AS
-  SELECT * FROM (VALUES ('2.2.1', 2, 2, 1))
+  SELECT * FROM (VALUES ('3.0.2', 3, 0, 2))
   AS "subquery"("string", "major", "minor", "revision");
 
 
@@ -54,6 +54,17 @@ COMMENT ON FUNCTION "highlight"
 -------------------------
 
 
+CREATE TABLE "temporary_transaction_data" (
+        PRIMARY KEY ("txid", "key"),
+        "txid"                  INT8            DEFAULT txid_current(),
+        "key"                   TEXT,
+        "value"                 TEXT            NOT NULL );
+
+COMMENT ON TABLE "temporary_transaction_data" IS 'Table to store temporary transaction data; shall be emptied before a transaction is committed';
+
+COMMENT ON COLUMN "temporary_transaction_data"."txid" IS 'Value returned by function txid_current(); should be added to WHERE clause, when doing SELECT on this table, but ignored when doing DELETE on this table';
+
+
 CREATE TABLE "system_setting" (
         "member_ttl"            INTERVAL );
 CREATE UNIQUE INDEX "system_setting_singleton_idx" ON "system_setting" ((1));
@@ -93,6 +104,7 @@ CREATE TABLE "member" (
         "activated"             TIMESTAMPTZ,
         "last_activity"         DATE,
         "last_login"            TIMESTAMPTZ,
+        "last_delegation_check" TIMESTAMPTZ,
         "login"                 TEXT            UNIQUE,
         "password"              TEXT,
         "locked"                BOOLEAN         NOT NULL DEFAULT FALSE,
@@ -105,6 +117,7 @@ CREATE TABLE "member" (
         "notify_email_secret_expiry"   TIMESTAMPTZ,
         "notify_email_lock_expiry"     TIMESTAMPTZ,
         "notify_level"          "notify_level",
+        "login_recovery_expiry"        TIMESTAMPTZ,
         "password_reset_secret"        TEXT     UNIQUE,
         "password_reset_secret_expiry" TIMESTAMPTZ,
         "name"                  TEXT            UNIQUE,
@@ -148,6 +161,7 @@ COMMENT ON COLUMN "member"."admin_comment"        IS 'Hidden comment for adminis
 COMMENT ON COLUMN "member"."activated"            IS 'Timestamp of first activation of account (i.e. usage of "invite_code"); required to be set for "active" members';
 COMMENT ON COLUMN "member"."last_activity"        IS 'Date of last activity of member; required to be set for "active" members';
 COMMENT ON COLUMN "member"."last_login"           IS 'Timestamp of last login';
+COMMENT ON COLUMN "member"."last_delegation_check" IS 'Timestamp of last delegation check (i.e. confirmation of all unit and area delegations)';
 COMMENT ON COLUMN "member"."login"                IS 'Login name';
 COMMENT ON COLUMN "member"."password"             IS 'Password (preferably as crypto-hash, depending on the frontend or access layer)';
 COMMENT ON COLUMN "member"."locked"               IS 'Locked members can not log in.';
@@ -160,6 +174,9 @@ COMMENT ON COLUMN "member"."notify_email_secret"        IS 'Secret sent to the a
 COMMENT ON COLUMN "member"."notify_email_secret_expiry" IS 'Expiry date/time for "notify_email_secret"';
 COMMENT ON COLUMN "member"."notify_email_lock_expiry"   IS 'Date/time until no further email confirmation mails may be sent (abuse protection)';
 COMMENT ON COLUMN "member"."notify_level"         IS 'Selects which event notifications are to be sent to the "notify_email" mail address, may be NULL if member did not make any selection yet';
+COMMENT ON COLUMN "member"."login_recovery_expiry"        IS 'Date/time after which another login recovery attempt is allowed';
+COMMENT ON COLUMN "member"."password_reset_secret"        IS 'Secret string sent via e-mail for password recovery';
+COMMENT ON COLUMN "member"."password_reset_secret_expiry" IS 'Date/time until the password recovery secret is valid, and date/time after which another password recovery attempt is allowed';
 COMMENT ON COLUMN "member"."name"                 IS 'Distinct name of the member, may be NULL if account has not been activated yet';
 COMMENT ON COLUMN "member"."identification"       IS 'Optional identification number or code of the member';
 COMMENT ON COLUMN "member"."authentication"       IS 'Information about how this member was authenticated';
@@ -318,6 +335,7 @@ CREATE TABLE "session" (
         "additional_secret"     TEXT,
         "expiry"                TIMESTAMPTZ     NOT NULL DEFAULT now() + '24 hours',
         "member_id"             INT8            REFERENCES "member" ("id") ON DELETE SET NULL,
+        "needs_delegation_check" BOOLEAN        NOT NULL DEFAULT FALSE,
         "lang"                  TEXT );
 CREATE INDEX "session_expiry_idx" ON "session" ("expiry");
 
@@ -326,7 +344,19 @@ COMMENT ON TABLE "session" IS 'Sessions, i.e. for a web-frontend or API layer';
 COMMENT ON COLUMN "session"."ident"             IS 'Secret session identifier (i.e. random string)';
 COMMENT ON COLUMN "session"."additional_secret" IS 'Additional field to store a secret, which can be used against CSRF attacks';
 COMMENT ON COLUMN "session"."member_id"         IS 'Reference to member, who is logged in';
+COMMENT ON COLUMN "session"."needs_delegation_check" IS 'Set to TRUE, if member must perform a delegation check to proceed with login; see column "last_delegation_check" in "member" table';
 COMMENT ON COLUMN "session"."lang"              IS 'Language code of the selected language';
+
+
+CREATE TYPE "defeat_strength" AS ENUM ('simple', 'tuple');
+
+COMMENT ON TYPE "defeat_strength" IS 'How pairwise defeats are measured for the Schulze method: ''simple'' = only the number of winning votes, ''tuple'' = primarily the number of winning votes, secondarily the number of losing votes';
+
+
+CREATE TYPE "tie_breaking" AS ENUM ('simple', 'variant1', 'variant2');
+
+COMMENT ON TYPE "tie_breaking" IS 'Tie-breaker for the Schulze method: ''simple'' = only initiative ids are used, ''variant1'' = use initiative ids in variant 1 for tie breaking of the links (TBRL) and sequentially forbid shared links, ''variant2'' = use initiative ids in variant 2 for tie breaking of the links (TBRL) and sequentially forbid shared links';
+
 
 
 CREATE TABLE "policy" (
@@ -344,6 +374,8 @@ CREATE TABLE "policy" (
         "issue_quorum_den"      INT4,
         "initiative_quorum_num" INT4            NOT NULL,
         "initiative_quorum_den" INT4            NOT NULL,
+        "defeat_strength"     "defeat_strength" NOT NULL DEFAULT 'tuple',
+        "tie_breaking"          "tie_breaking"  NOT NULL DEFAULT 'variant1',
         "direct_majority_num"           INT4    NOT NULL DEFAULT 1,
         "direct_majority_den"           INT4    NOT NULL DEFAULT 2,
         "direct_majority_strict"        BOOLEAN NOT NULL DEFAULT TRUE,
@@ -354,7 +386,7 @@ CREATE TABLE "policy" (
         "indirect_majority_strict"      BOOLEAN NOT NULL DEFAULT TRUE,
         "indirect_majority_positive"    INT4    NOT NULL DEFAULT 0,
         "indirect_majority_non_negative" INT4   NOT NULL DEFAULT 0,
-        "no_reverse_beat_path"          BOOLEAN NOT NULL DEFAULT TRUE,
+        "no_reverse_beat_path"          BOOLEAN NOT NULL DEFAULT FALSE,
         "no_multistage_majority"        BOOLEAN NOT NULL DEFAULT FALSE,
         CONSTRAINT "timing" CHECK (
           ( "polling" = FALSE AND
@@ -368,7 +400,10 @@ CREATE TABLE "policy" (
             "verification_time" ISNULL AND "voting_time" ISNULL ) ),
         CONSTRAINT "issue_quorum_if_and_only_if_not_polling" CHECK (
           "polling" = "issue_quorum_num" ISNULL AND
-          "polling" = "issue_quorum_den" ISNULL ) );
+          "polling" = "issue_quorum_den" ISNULL ),
+        CONSTRAINT "no_reverse_beat_path_requires_tuple_defeat_strength" CHECK (
+          "defeat_strength" = 'tuple'::"defeat_strength" OR
+          "no_reverse_beat_path" = FALSE ) );
 CREATE INDEX "policy_active_idx" ON "policy" ("active");
 
 COMMENT ON TABLE "policy" IS 'Policies for a particular proceeding type (timelimits, quorum)';
@@ -384,6 +419,8 @@ COMMENT ON COLUMN "policy"."issue_quorum_num"      IS   'Numerator of potential 
 COMMENT ON COLUMN "policy"."issue_quorum_den"      IS 'Denominator of potential supporter quorum to be reached by one initiative of an issue to be "accepted" and enter issue state ''discussion''';
 COMMENT ON COLUMN "policy"."initiative_quorum_num" IS   'Numerator of satisfied supporter quorum  to be reached by an initiative to be "admitted" for voting';
 COMMENT ON COLUMN "policy"."initiative_quorum_den" IS 'Denominator of satisfied supporter quorum to be reached by an initiative to be "admitted" for voting';
+COMMENT ON COLUMN "policy"."defeat_strength"       IS 'How pairwise defeats are measured for the Schulze method; see type "defeat_strength"; ''tuple'' is the recommended setting';
+COMMENT ON COLUMN "policy"."tie_breaking"          IS 'Tie-breaker for the Schulze method; see type "tie_breaking"; ''variant1'' or ''variant2'' are recommended';
 COMMENT ON COLUMN "policy"."direct_majority_num"            IS 'Numerator of fraction of neccessary direct majority for initiatives to be attainable as winner';
 COMMENT ON COLUMN "policy"."direct_majority_den"            IS 'Denominator of fraction of neccessary direct majority for initaitives to be attainable as winner';
 COMMENT ON COLUMN "policy"."direct_majority_strict"         IS 'If TRUE, then the direct majority must be strictly greater than "direct_majority_num"/"direct_majority_den", otherwise it may also be equal.';
@@ -394,8 +431,8 @@ COMMENT ON COLUMN "policy"."indirect_majority_den"          IS 'Denominator of f
 COMMENT ON COLUMN "policy"."indirect_majority_strict"       IS 'If TRUE, then the indirect majority must be strictly greater than "indirect_majority_num"/"indirect_majority_den", otherwise it may also be equal.';
 COMMENT ON COLUMN "policy"."indirect_majority_positive"     IS 'Absolute number of votes in favor of the winner neccessary in a beat path to the status quo for an initaitive to be attainable as winner';
 COMMENT ON COLUMN "policy"."indirect_majority_non_negative" IS 'Absolute number of sum of votes in favor and abstentions in a beat path to the status quo for an initiative to be attainable as winner';
-COMMENT ON COLUMN "policy"."no_reverse_beat_path"  IS 'Causes initiatives with "reverse_beat_path" flag to not be "eligible", thus disallowing them to be winner. See comment on column "initiative"."reverse_beat_path". This option ensures both that a winning initiative is never tied in a (weak) condorcet paradox with the status quo and a winning initiative always beats the status quo directly with a simple majority.';
-COMMENT ON COLUMN "policy"."no_multistage_majority" IS 'Causes initiatives with "multistage_majority" flag to not be "eligible", thus disallowing them to be winner. See comment on column "initiative"."multistage_majority". This disqualifies initiatives which could cause an instable result. An instable result in this meaning is a result such that repeating the ballot with same preferences but with the winner of the first ballot as status quo would lead to a different winner in the second ballot. If there are no direct majorities required for the winner, or if in direct comparison only simple majorities are required and "no_reverse_beat_path" is true, then results are always stable and this flag does not have any effect on the winner (but still affects the "eligible" flag of an "initiative").';
+COMMENT ON COLUMN "policy"."no_reverse_beat_path" IS 'EXPERIMENTAL FEATURE: Causes initiatives with "reverse_beat_path" flag to not be "eligible", thus disallowing them to be winner. See comment on column "initiative"."reverse_beat_path". This option ensures both that a winning initiative is never tied in a (weak) condorcet paradox with the status quo and a winning initiative always beats the status quo directly with a simple majority.';
+COMMENT ON COLUMN "policy"."no_multistage_majority" IS 'EXPERIMENTAL FEATURE: Causes initiatives with "multistage_majority" flag to not be "eligible", thus disallowing them to be winner. See comment on column "initiative"."multistage_majority". This disqualifies initiatives which could cause an instable result. An instable result in this meaning is a result such that repeating the ballot with same preferences but with the winner of the first ballot as status quo would lead to a different winner in the second ballot. If there are no direct majorities required for the winner, or if in direct comparison only simple majorities are required and "no_reverse_beat_path" is true, then results are always stable and this flag does not have any effect on the winner (but still affects the "eligible" flag of an "initiative").';
 
 
 CREATE TABLE "unit" (
@@ -487,6 +524,7 @@ COMMENT ON TYPE "snapshot_event" IS 'Reason for snapshots: ''periodic'' = due to
 
 CREATE TYPE "issue_state" AS ENUM (
         'admission', 'discussion', 'verification', 'voting',
+        'canceled_by_admin',
         'canceled_revoked_before_accepted',
         'canceled_issue_not_accepted',
         'canceled_after_revocation_during_discussion',
@@ -501,6 +539,7 @@ CREATE TABLE "issue" (
         "id"                    SERIAL4         PRIMARY KEY,
         "area_id"               INT4            NOT NULL REFERENCES "area" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
         "policy_id"             INT4            NOT NULL REFERENCES "policy" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        "admin_notice"          TEXT,
         "state"                 "issue_state"   NOT NULL DEFAULT 'admission',
         "phase_finished"        TIMESTAMPTZ,
         "created"               TIMESTAMPTZ     NOT NULL DEFAULT now(),
@@ -531,6 +570,7 @@ CREATE TABLE "issue" (
             ("state" = 'discussion'   AND "closed" ISNULL AND "accepted" NOTNULL AND "half_frozen" ISNULL) OR
             ("state" = 'verification' AND "closed" ISNULL AND "half_frozen" NOTNULL AND "fully_frozen" ISNULL) OR
             ("state" = 'voting'       AND "closed" ISNULL AND "fully_frozen" NOTNULL) OR
+            ("state" = 'canceled_by_admin' AND "closed" NOTNULL) OR
             ("state" = 'canceled_revoked_before_accepted'              AND "closed" NOTNULL AND "accepted" ISNULL) OR
             ("state" = 'canceled_issue_not_accepted'                   AND "closed" NOTNULL AND "accepted" ISNULL) OR
             ("state" = 'canceled_after_revocation_during_discussion'   AND "closed" NOTNULL AND "half_frozen"  ISNULL) OR
@@ -566,6 +606,7 @@ CREATE INDEX "issue_closed_idx_canceled" ON "issue" ("closed") WHERE "fully_froz
 
 COMMENT ON TABLE "issue" IS 'Groups of initiatives';
 
+COMMENT ON COLUMN "issue"."admin_notice"            IS 'Public notice by admin to explain manual interventions, or to announce corrections';
 COMMENT ON COLUMN "issue"."phase_finished"          IS 'Set to a value NOTNULL, if the current phase has finished, but calculations are pending; No changes in this issue shall be made by the frontend or API when this value is set';
 COMMENT ON COLUMN "issue"."accepted"                IS 'Point in time, when one initiative of issue reached the "issue_quorum"';
 COMMENT ON COLUMN "issue"."half_frozen"             IS 'Point in time, when "discussion_time" has elapsed; Frontends must ensure that for half_frozen issues a) initiatives are not revoked, b) no new drafts are created, c) no initiators are added or removed.';
@@ -581,6 +622,18 @@ COMMENT ON COLUMN "issue"."latest_snapshot_event"   IS 'Event type of latest sna
 COMMENT ON COLUMN "issue"."population"              IS 'Sum of "weight" column in table "direct_population_snapshot"';
 COMMENT ON COLUMN "issue"."voter_count"             IS 'Total number of direct and delegating voters; This value is related to the final voting, while "population" is related to snapshots before the final voting';
 COMMENT ON COLUMN "issue"."status_quo_schulze_rank" IS 'Schulze rank of status quo, as calculated by "calculate_ranks" function';
+
+
+CREATE TABLE "issue_order_in_admission_state" (
+        "id"                    INT8            PRIMARY KEY, --REFERENCES "issue" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "order_in_area"         INT4,
+        "order_in_unit"         INT4 );
+
+COMMENT ON TABLE "issue_order_in_admission_state" IS 'Ordering information for issues that are not stored in the "issue" table to avoid locking of multiple issues at once; Filled/updated by "lf_update_issue_order"';
+
+COMMENT ON COLUMN "issue_order_in_admission_state"."id"            IS 'References "issue" ("id") but has no referential integrity trigger associated, due to performance/locking issues';
+COMMENT ON COLUMN "issue_order_in_admission_state"."order_in_area" IS 'Order of issues in admission state within a single area; NULL values sort last';
+COMMENT ON COLUMN "issue_order_in_admission_state"."order_in_unit" IS 'Order of issues in admission state within all areas of a unit; NULL values sort last';
 
 
 CREATE TABLE "issue_setting" (
@@ -611,6 +664,7 @@ CREATE TABLE "initiative" (
         "satisfied_informed_supporter_count" INT4,
         "harmonic_weight"       NUMERIC(12, 3),
         "final_suggestion_order_calculated" BOOLEAN NOT NULL DEFAULT FALSE,
+        "first_preference_votes" INT4,
         "positive_votes"        INT4,
         "negative_votes"        INT4,
         "direct_majority"       BOOLEAN,
@@ -632,7 +686,8 @@ CREATE TABLE "initiative" (
           CHECK ("revoked" ISNULL OR "admitted" ISNULL),
         CONSTRAINT "non_admitted_initiatives_cant_contain_voting_results" CHECK (
           ( "admitted" NOTNULL AND "admitted" = TRUE ) OR
-          ( "positive_votes" ISNULL AND "negative_votes" ISNULL AND
+          ( "first_preference_votes" ISNULL AND
+            "positive_votes" ISNULL AND "negative_votes" ISNULL AND
             "direct_majority" ISNULL AND "indirect_majority" ISNULL AND
             "schulze_rank" ISNULL AND
             "better_than_status_quo" ISNULL AND "worse_than_status_quo" ISNULL AND
@@ -668,17 +723,18 @@ COMMENT ON COLUMN "initiative"."satisfied_supporter_count"          IS 'Calculat
 COMMENT ON COLUMN "initiative"."satisfied_informed_supporter_count" IS 'Calculated from table "direct_supporter_snapshot"';
 COMMENT ON COLUMN "initiative"."harmonic_weight"        IS 'Indicates the relevancy of the initiative, calculated from the potential supporters weighted with the harmonic series to avoid a large number of clones affecting other initiative''s sorting positions too much; shall be used as secondary sorting key after "admitted" as primary sorting key';
 COMMENT ON COLUMN "initiative"."final_suggestion_order_calculated" IS 'Set to TRUE, when "proportional_order" of suggestions has been calculated the last time';
-COMMENT ON COLUMN "initiative"."positive_votes"         IS 'Calculated from table "direct_voter"';
-COMMENT ON COLUMN "initiative"."negative_votes"         IS 'Calculated from table "direct_voter"';
+COMMENT ON COLUMN "initiative"."first_preference_votes" IS 'Number of direct and delegating voters who ranked this initiative as their first choice';
+COMMENT ON COLUMN "initiative"."positive_votes"         IS 'Number of direct and delegating voters who ranked this initiative better than the status quo';
+COMMENT ON COLUMN "initiative"."negative_votes"         IS 'Number of direct and delegating voters who ranked this initiative worse than the status quo';
 COMMENT ON COLUMN "initiative"."direct_majority"        IS 'TRUE, if "positive_votes"/("positive_votes"+"negative_votes") is strictly greater or greater-equal than "direct_majority_num"/"direct_majority_den", and "positive_votes" is greater-equal than "direct_majority_positive", and ("positive_votes"+abstentions) is greater-equal than "direct_majority_non_negative"';
 COMMENT ON COLUMN "initiative"."indirect_majority"      IS 'Same as "direct_majority", but also considering indirect beat paths';
-COMMENT ON COLUMN "initiative"."schulze_rank"           IS 'Schulze-Ranking without tie-breaking';
-COMMENT ON COLUMN "initiative"."better_than_status_quo" IS 'TRUE, if initiative has a schulze-ranking better than the status quo (without tie-breaking)';
-COMMENT ON COLUMN "initiative"."worse_than_status_quo"  IS 'TRUE, if initiative has a schulze-ranking worse than the status quo (without tie-breaking)';
-COMMENT ON COLUMN "initiative"."reverse_beat_path"      IS 'TRUE, if there is a beat path (may include ties) from this initiative to the status quo';
+COMMENT ON COLUMN "initiative"."schulze_rank"           IS 'Schulze-Ranking';
+COMMENT ON COLUMN "initiative"."better_than_status_quo" IS 'TRUE, if initiative has a schulze-ranking better than the status quo';
+COMMENT ON COLUMN "initiative"."worse_than_status_quo"  IS 'TRUE, if initiative has a schulze-ranking worse than the status quo (DEPRECATED, since schulze-ranking is unique per issue; use "better_than_status_quo"=FALSE)';
+COMMENT ON COLUMN "initiative"."reverse_beat_path"      IS 'TRUE, if there is a beat path (may include ties) from this initiative to the status quo; set to NULL if "policy"."defeat_strength" is set to ''simple''';
 COMMENT ON COLUMN "initiative"."multistage_majority"    IS 'TRUE, if either (a) this initiative has no better rank than the status quo, or (b) there exists a better ranked initiative X, which directly beats this initiative, and either more voters prefer X to this initiative than voters preferring X to the status quo or less voters prefer this initiative to X than voters preferring the status quo to X';
 COMMENT ON COLUMN "initiative"."eligible"               IS 'Initiative has a "direct_majority" and an "indirect_majority", is "better_than_status_quo" and depending on selected policy the initiative has no "reverse_beat_path" or "multistage_majority"';
-COMMENT ON COLUMN "initiative"."winner"                 IS 'Winner is the "eligible" initiative with best "schulze_rank" and in case of ties with lowest "id"';
+COMMENT ON COLUMN "initiative"."winner"                 IS 'Winner is the "eligible" initiative with best "schulze_rank"';
 COMMENT ON COLUMN "initiative"."rank"                   IS 'Unique ranking for all "admitted" initiatives per issue; lower rank is better; a winner always has rank 1, but rank 1 does not imply that an initiative is winner; initiatives with "direct_majority" AND "indirect_majority" always have a better (lower) rank than other initiatives';
 
 
@@ -940,7 +996,7 @@ CREATE TABLE "direct_population_snapshot" (
         "weight"                INT4 );
 CREATE INDEX "direct_population_snapshot_member_id_idx" ON "direct_population_snapshot" ("member_id");
 
-COMMENT ON TABLE "direct_population_snapshot" IS 'Snapshot of active members having either a "membership" in the "area" or an "interest" in the "issue"';
+COMMENT ON TABLE "direct_population_snapshot" IS 'Snapshot of active members having either a "membership" in the "area" or an "interest" in the "issue"; for corrections refer to column "issue_notice" of "issue" table';
 
 COMMENT ON COLUMN "direct_population_snapshot"."event"  IS 'Reason for snapshot, see "snapshot_event" type for details';
 COMMENT ON COLUMN "direct_population_snapshot"."weight" IS 'Weight of member (1 or higher) according to "delegating_population_snapshot"';
@@ -956,7 +1012,7 @@ CREATE TABLE "delegating_population_snapshot" (
         "delegate_member_ids"   INT4[]          NOT NULL );
 CREATE INDEX "delegating_population_snapshot_member_id_idx" ON "delegating_population_snapshot" ("member_id");
 
-COMMENT ON TABLE "direct_population_snapshot" IS 'Delegations increasing the weight of entries in the "direct_population_snapshot" table';
+COMMENT ON TABLE "direct_population_snapshot" IS 'Delegations increasing the weight of entries in the "direct_population_snapshot" table; for corrections refer to column "issue_notice" of "issue" table';
 
 COMMENT ON COLUMN "delegating_population_snapshot"."event"               IS 'Reason for snapshot, see "snapshot_event" type for details';
 COMMENT ON COLUMN "delegating_population_snapshot"."member_id"           IS 'Delegating member';
@@ -972,7 +1028,7 @@ CREATE TABLE "direct_interest_snapshot" (
         "weight"                INT4 );
 CREATE INDEX "direct_interest_snapshot_member_id_idx" ON "direct_interest_snapshot" ("member_id");
 
-COMMENT ON TABLE "direct_interest_snapshot" IS 'Snapshot of active members having an "interest" in the "issue"';
+COMMENT ON TABLE "direct_interest_snapshot" IS 'Snapshot of active members having an "interest" in the "issue"; for corrections refer to column "issue_notice" of "issue" table';
 
 COMMENT ON COLUMN "direct_interest_snapshot"."event"            IS 'Reason for snapshot, see "snapshot_event" type for details';
 COMMENT ON COLUMN "direct_interest_snapshot"."weight"           IS 'Weight of member (1 or higher) according to "delegating_interest_snapshot"';
@@ -988,7 +1044,7 @@ CREATE TABLE "delegating_interest_snapshot" (
         "delegate_member_ids"   INT4[]          NOT NULL );
 CREATE INDEX "delegating_interest_snapshot_member_id_idx" ON "delegating_interest_snapshot" ("member_id");
 
-COMMENT ON TABLE "delegating_interest_snapshot" IS 'Delegations increasing the weight of entries in the "direct_interest_snapshot" table';
+COMMENT ON TABLE "delegating_interest_snapshot" IS 'Delegations increasing the weight of entries in the "direct_interest_snapshot" table; for corrections refer to column "issue_notice" of "issue" table';
 
 COMMENT ON COLUMN "delegating_interest_snapshot"."event"               IS 'Reason for snapshot, see "snapshot_event" type for details';
 COMMENT ON COLUMN "delegating_interest_snapshot"."member_id"           IS 'Delegating member';
@@ -1010,7 +1066,7 @@ CREATE TABLE "direct_supporter_snapshot" (
         FOREIGN KEY ("issue_id", "event", "member_id") REFERENCES "direct_interest_snapshot" ("issue_id", "event", "member_id") ON DELETE CASCADE ON UPDATE CASCADE );
 CREATE INDEX "direct_supporter_snapshot_member_id_idx" ON "direct_supporter_snapshot" ("member_id");
 
-COMMENT ON TABLE "direct_supporter_snapshot" IS 'Snapshot of supporters of initiatives (weight is stored in "direct_interest_snapshot")';
+COMMENT ON TABLE "direct_supporter_snapshot" IS 'Snapshot of supporters of initiatives (weight is stored in "direct_interest_snapshot"); for corrections refer to column "issue_notice" of "issue" table';
 
 COMMENT ON COLUMN "direct_supporter_snapshot"."issue_id"  IS 'WARNING: No index: For selections use column "initiative_id" and join via table "initiative" where neccessary';
 COMMENT ON COLUMN "direct_supporter_snapshot"."event"     IS 'Reason for snapshot, see "snapshot_event" type for details';
@@ -1043,7 +1099,7 @@ CREATE TRIGGER "update_text_search_data"
   FOR EACH ROW EXECUTE PROCEDURE
   tsvector_update_trigger('text_search_data', 'pg_catalog.simple', "comment");
 
-COMMENT ON TABLE "direct_voter" IS 'Members having directly voted for/against initiatives of an issue; Frontends must ensure that no voters are added or removed to/from this table when the issue has been closed.';
+COMMENT ON TABLE "direct_voter" IS 'Members having directly voted for/against initiatives of an issue; frontends must ensure that no voters are added or removed to/from this table when the issue has been closed; for corrections refer to column "issue_notice" of "issue" table';
 
 COMMENT ON COLUMN "direct_voter"."weight"            IS 'Weight of member (1 or higher) according to "delegating_voter" table';
 COMMENT ON COLUMN "direct_voter"."comment_changed"   IS 'Shall be set on comment change, to indicate a comment being modified after voting has been finished; Automatically set to NULL after voting phase; Automatically set to NULL by trigger, if "comment" is set to NULL';
@@ -1073,7 +1129,7 @@ CREATE TABLE "delegating_voter" (
         "delegate_member_ids"   INT4[]          NOT NULL );
 CREATE INDEX "delegating_voter_member_id_idx" ON "delegating_voter" ("member_id");
 
-COMMENT ON TABLE "delegating_voter" IS 'Delegations increasing the weight of entries in the "direct_voter" table';
+COMMENT ON TABLE "delegating_voter" IS 'Delegations increasing the weight of entries in the "direct_voter" table; for corrections refer to column "issue_notice" of "issue" table';
 
 COMMENT ON COLUMN "delegating_voter"."member_id"           IS 'Delegating member';
 COMMENT ON COLUMN "delegating_voter"."weight"              IS 'Intermediate weight';
@@ -1085,15 +1141,19 @@ CREATE TABLE "vote" (
         PRIMARY KEY ("initiative_id", "member_id"),
         "initiative_id"         INT4,
         "member_id"             INT4,
-        "grade"                 INT4,
+        "grade"                 INT4            NOT NULL,
+        "first_preference"      BOOLEAN,
         FOREIGN KEY ("issue_id", "initiative_id") REFERENCES "initiative" ("issue_id", "id") ON DELETE CASCADE ON UPDATE CASCADE,
-        FOREIGN KEY ("issue_id", "member_id") REFERENCES "direct_voter" ("issue_id", "member_id") ON DELETE CASCADE ON UPDATE CASCADE );
+        FOREIGN KEY ("issue_id", "member_id") REFERENCES "direct_voter" ("issue_id", "member_id") ON DELETE CASCADE ON UPDATE CASCADE,
+        CONSTRAINT "first_preference_flag_only_set_on_positive_grades"
+          CHECK ("grade" > 0 OR "first_preference" ISNULL) );
 CREATE INDEX "vote_member_id_idx" ON "vote" ("member_id");
 
-COMMENT ON TABLE "vote" IS 'Manual and delegated votes without abstentions; Frontends must ensure that no votes are added modified or removed when the issue has been closed.';
+COMMENT ON TABLE "vote" IS 'Manual and delegated votes without abstentions; frontends must ensure that no votes are added modified or removed when the issue has been closed; for corrections refer to column "issue_notice" of "issue" table';
 
-COMMENT ON COLUMN "vote"."issue_id" IS 'WARNING: No index: For selections use column "initiative_id" and join via table "initiative" where neccessary';
-COMMENT ON COLUMN "vote"."grade"    IS 'Values smaller than zero mean reject, values greater than zero mean acceptance, zero or missing row means abstention. Preferences are expressed by different positive or negative numbers.';
+COMMENT ON COLUMN "vote"."issue_id"         IS 'WARNING: No index: For selections use column "initiative_id" and join via table "initiative" where neccessary';
+COMMENT ON COLUMN "vote"."grade"            IS 'Values smaller than zero mean reject, values greater than zero mean acceptance, zero or missing row means abstention. Preferences are expressed by different positive or negative numbers.';
+COMMENT ON COLUMN "vote"."first_preference" IS 'Value is automatically set after voting is finished. For positive grades, this value is set to true for the highest (i.e. best) grade.';
 
 
 CREATE TYPE "event_type" AS ENUM (
@@ -1587,6 +1647,14 @@ CREATE FUNCTION "forbid_changes_on_closed_issue_trigger"()
       "issue_id_v" "issue"."id"%TYPE;
       "issue_row"  "issue"%ROWTYPE;
     BEGIN
+      IF EXISTS (
+        SELECT NULL FROM "temporary_transaction_data"
+        WHERE "txid" = txid_current()
+        AND "key" = 'override_protection_triggers'
+        AND "value" = TRUE::TEXT
+      ) THEN
+        RETURN NULL;
+      END IF;
       IF TG_OP = 'DELETE' THEN
         "issue_id_v" := OLD."issue_id";
       ELSE
@@ -1594,7 +1662,12 @@ CREATE FUNCTION "forbid_changes_on_closed_issue_trigger"()
       END IF;
       SELECT INTO "issue_row" * FROM "issue"
         WHERE "id" = "issue_id_v" FOR SHARE;
-      IF "issue_row"."closed" NOTNULL THEN
+      IF (
+        "issue_row"."closed" NOTNULL OR (
+          "issue_row"."state" = 'voting' AND
+          "issue_row"."phase_finished" NOTNULL
+        )
+      ) THEN
         IF
           TG_RELID = 'direct_voter'::regclass AND
           TG_OP = 'UPDATE'
@@ -1607,14 +1680,7 @@ CREATE FUNCTION "forbid_changes_on_closed_issue_trigger"()
             RETURN NULL;  -- allows changing of voter comment
           END IF;
         END IF;
-        RAISE EXCEPTION 'Tried to modify data belonging to a closed issue.';
-      ELSIF
-        "issue_row"."state" = 'voting' AND
-        "issue_row"."phase_finished" NOTNULL
-      THEN
-        IF TG_RELID = 'vote'::regclass THEN
-          RAISE EXCEPTION 'Tried to modify data after voting has been closed.';
-        END IF;
+        RAISE EXCEPTION 'Tried to modify data after voting has been closed.';
       END IF;
       RETURN NULL;
     END;
@@ -2032,6 +2098,25 @@ CREATE VIEW "critical_opinion" AS
 COMMENT ON VIEW "critical_opinion" IS 'Opinions currently causing dissatisfaction';
 
 
+CREATE VIEW "issue_supporter_in_admission_state" AS
+  SELECT DISTINCT
+    "area"."unit_id",
+    "issue"."area_id",
+    "issue"."id" AS "issue_id",
+    "supporter"."member_id",
+    "direct_interest_snapshot"."weight"
+  FROM "issue"
+  JOIN "area" ON "area"."id" = "issue"."area_id"
+  JOIN "supporter" ON "supporter"."issue_id" = "issue"."id"
+  JOIN "direct_interest_snapshot"
+    ON  "direct_interest_snapshot"."issue_id" = "issue"."id"
+    AND "direct_interest_snapshot"."event" = "issue"."latest_snapshot_event"
+    AND "direct_interest_snapshot"."member_id" = "supporter"."member_id"
+  WHERE "issue"."state" = 'admission'::"issue_state";
+
+COMMENT ON VIEW "issue_supporter_in_admission_state" IS 'Helper view for "lf_update_issue_order" to allow a (proportional) ordering of issues within an area';
+
+
 CREATE VIEW "initiative_suggestion_order_calculation" AS
   SELECT
     "initiative"."id" AS "initiative_id",
@@ -2228,9 +2313,6 @@ CREATE VIEW "event_seen_by_member" AS
   LEFT JOIN "interest"
     ON "member"."id" = "interest"."member_id"
     AND "event"."issue_id" = "interest"."issue_id"
-  LEFT JOIN "supporter"
-    ON "member"."id" = "supporter"."member_id"
-    AND "event"."initiative_id" = "supporter"."initiative_id"
   LEFT JOIN "ignored_member"
     ON "member"."id" = "ignored_member"."member_id"
     AND "event"."member_id" = "ignored_member"."other_member_id"
@@ -2238,7 +2320,6 @@ CREATE VIEW "event_seen_by_member" AS
     ON "member"."id" = "ignored_initiative"."member_id"
     AND "event"."initiative_id" = "ignored_initiative"."initiative_id"
   WHERE (
-    "supporter"."member_id" NOTNULL OR
     "interest"."member_id" NOTNULL OR
     ( "membership"."member_id" NOTNULL AND
       "event"."event" IN (
@@ -2289,9 +2370,6 @@ CREATE VIEW "selected_event_seen_by_member" AS
   LEFT JOIN "interest"
     ON "member"."id" = "interest"."member_id"
     AND "event"."issue_id" = "interest"."issue_id"
-  LEFT JOIN "supporter"
-    ON "member"."id" = "supporter"."member_id"
-    AND "event"."initiative_id" = "supporter"."initiative_id"
   LEFT JOIN "ignored_member"
     ON "member"."id" = "ignored_member"."member_id"
     AND "event"."member_id" = "ignored_member"."other_member_id"
@@ -2315,7 +2393,6 @@ CREATE VIEW "selected_event_seen_by_member" AS
         'discussion',
         'canceled_after_revocation_during_discussion' ) ) )
   AND (
-    "supporter"."member_id" NOTNULL OR
     "interest"."member_id" NOTNULL OR
     ( "membership"."member_id" NOTNULL AND
       "event"."event" IN (
@@ -3653,6 +3730,9 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
       PERFORM "require_transaction_isolation"();
       SELECT "area_id" INTO "area_id_v" FROM "issue" WHERE "id" = "issue_id_p";
       SELECT "unit_id" INTO "unit_id_v" FROM "area"  WHERE "id" = "area_id_v";
+      -- override protection triggers:
+      INSERT INTO "temporary_transaction_data" ("key", "value")
+        VALUES ('override_protection_triggers', TRUE::TEXT);
       -- delete timestamp of voting comment:
       UPDATE "direct_voter" SET "comment_changed" = NULL
         WHERE "issue_id" = "issue_id_p";
@@ -3681,6 +3761,30 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
       UPDATE "direct_voter" SET "weight" = 1
         WHERE "issue_id" = "issue_id_p";
       PERFORM "add_vote_delegations"("issue_id_p");
+      -- mark first preferences:
+      UPDATE "vote" SET "first_preference" = "subquery"."first_preference"
+        FROM (
+          SELECT
+            "vote"."initiative_id",
+            "vote"."member_id",
+            CASE WHEN "vote"."grade" > 0 THEN
+              CASE WHEN "vote"."grade" = max("agg"."grade") THEN TRUE ELSE FALSE END
+            ELSE NULL
+            END AS "first_preference"
+          FROM "vote"
+          JOIN "initiative"  -- NOTE: due to missing index on issue_id
+          ON "vote"."issue_id" = "initiative"."issue_id"
+          JOIN "vote" AS "agg"
+          ON "initiative"."id" = "agg"."initiative_id"
+          AND "vote"."member_id" = "agg"."member_id"
+          GROUP BY "vote"."initiative_id", "vote"."member_id", "vote"."grade"
+        ) AS "subquery"
+        WHERE "vote"."issue_id" = "issue_id_p"
+        AND "vote"."initiative_id" = "subquery"."initiative_id"
+        AND "vote"."member_id" = "subquery"."member_id";
+      -- finish overriding protection triggers (avoids garbage):
+      DELETE FROM "temporary_transaction_data"
+        WHERE "key" = 'override_protection_triggers';
       -- materialize battle_view:
       -- NOTE: "closed" column of issue must be set at this point
       DELETE FROM "battle" WHERE "issue_id" = "issue_id_p";
@@ -3700,6 +3804,20 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
           FROM "direct_voter" WHERE "issue_id" = "issue_id_p"
         )
         WHERE "id" = "issue_id_p";
+      -- calculate "first_preference_votes":
+      UPDATE "initiative"
+        SET "first_preference_votes" = coalesce("subquery"."sum", 0)
+        FROM (
+          SELECT "vote"."initiative_id", sum("direct_voter"."weight")
+          FROM "vote" JOIN "direct_voter"
+          ON "vote"."issue_id" = "direct_voter"."issue_id"
+          AND "vote"."member_id" = "direct_voter"."member_id"
+          WHERE "vote"."first_preference"
+          GROUP BY "vote"."initiative_id"
+        ) AS "subquery"
+        WHERE "initiative"."issue_id" = "issue_id_p"
+        AND "initiative"."admitted"
+        AND "initiative"."id" = "subquery"."initiative_id";
       -- copy "positive_votes" and "negative_votes" from "battle" table:
       UPDATE "initiative" SET
         "positive_votes" = "battle_win"."count",
@@ -3721,94 +3839,83 @@ COMMENT ON FUNCTION "close_voting"
 
 
 CREATE FUNCTION "defeat_strength"
-  ( "positive_votes_p" INT4, "negative_votes_p" INT4 )
+  ( "positive_votes_p"  INT4,
+    "negative_votes_p"  INT4,
+    "defeat_strength_p" "defeat_strength" )
   RETURNS INT8
   LANGUAGE 'plpgsql' IMMUTABLE AS $$
     BEGIN
-      IF "positive_votes_p" > "negative_votes_p" THEN
-        RETURN ("positive_votes_p"::INT8 << 31) - "negative_votes_p"::INT8;
-      ELSIF "positive_votes_p" = "negative_votes_p" THEN
-        RETURN 0;
+      IF "defeat_strength_p" = 'simple'::"defeat_strength" THEN
+        IF "positive_votes_p" > "negative_votes_p" THEN
+          RETURN "positive_votes_p";
+        ELSE
+          RETURN 0;
+        END IF;
       ELSE
-        RETURN -1;
+        IF "positive_votes_p" > "negative_votes_p" THEN
+          RETURN ("positive_votes_p"::INT8 << 31) - "negative_votes_p"::INT8;
+        ELSIF "positive_votes_p" = "negative_votes_p" THEN
+          RETURN 0;
+        ELSE
+          RETURN -1;
+        END IF;
       END IF;
     END;
   $$;
 
-COMMENT ON FUNCTION "defeat_strength"(INT4, INT4) IS 'Calculates defeat strength (INT8!) of a pairwise defeat primarily by the absolute number of votes for the winner and secondarily by the absolute number of votes for the loser';
+COMMENT ON FUNCTION "defeat_strength"(INT4, INT4, "defeat_strength") IS 'Calculates defeat strength (INT8!) according to the "defeat_strength" option (see comment on type "defeat_strength")';
 
 
-CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
-  RETURNS VOID
-  LANGUAGE 'plpgsql' VOLATILE AS $$
-    DECLARE
-      "issue_row"         "issue"%ROWTYPE;
-      "policy_row"        "policy"%ROWTYPE;
-      "dimension_v"       INTEGER;
-      "vote_matrix"       INT4[][];  -- absolute votes
-      "matrix"            INT8[][];  -- defeat strength / best paths
-      "i"                 INTEGER;
-      "j"                 INTEGER;
-      "k"                 INTEGER;
-      "battle_row"        "battle"%ROWTYPE;
-      "rank_ary"          INT4[];
-      "rank_v"            INT4;
-      "done_v"            INTEGER;
-      "winners_ary"       INTEGER[];
-      "initiative_id_v"   "initiative"."id"%TYPE;
+CREATE FUNCTION "secondary_link_strength"
+  ( "initiative1_ord_p" INT4,
+    "initiative2_ord_p" INT4,
+    "tie_breaking_p"   "tie_breaking" )
+  RETURNS INT8
+  LANGUAGE 'plpgsql' IMMUTABLE AS $$
     BEGIN
-      PERFORM "require_transaction_isolation"();
-      SELECT * INTO "issue_row"
-        FROM "issue" WHERE "id" = "issue_id_p";
-      SELECT * INTO "policy_row"
-        FROM "policy" WHERE "id" = "issue_row"."policy_id";
-      SELECT count(1) INTO "dimension_v"
-        FROM "battle_participant" WHERE "issue_id" = "issue_id_p";
-      -- Create "vote_matrix" with absolute number of votes in pairwise
-      -- comparison:
-      "vote_matrix" := array_fill(NULL::INT4, ARRAY["dimension_v", "dimension_v"]);
-      "i" := 1;
-      "j" := 2;
-      FOR "battle_row" IN
-        SELECT * FROM "battle" WHERE "issue_id" = "issue_id_p"
-        ORDER BY
-        "winning_initiative_id" NULLS LAST,
-        "losing_initiative_id" NULLS LAST
-      LOOP
-        "vote_matrix"["i"]["j"] := "battle_row"."count";
-        IF "j" = "dimension_v" THEN
-          "i" := "i" + 1;
-          "j" := 1;
-        ELSE
-          "j" := "j" + 1;
-          IF "j" = "i" THEN
-            "j" := "j" + 1;
-          END IF;
-        END IF;
-      END LOOP;
-      IF "i" != "dimension_v" OR "j" != "dimension_v" + 1 THEN
-        RAISE EXCEPTION 'Wrong battle count (should not happen)';
+      IF "initiative1_ord_p" = "initiative2_ord_p" THEN
+        RAISE EXCEPTION 'Identical initiative ids passed to "secondary_link_strength" function (should not happen)';
       END IF;
-      -- Store defeat strengths in "matrix" using "defeat_strength"
-      -- function:
-      "matrix" := array_fill(NULL::INT8, ARRAY["dimension_v", "dimension_v"]);
-      "i" := 1;
-      LOOP
-        "j" := 1;
-        LOOP
-          IF "i" != "j" THEN
-            "matrix"["i"]["j"] := "defeat_strength"(
-              "vote_matrix"["i"]["j"],
-              "vote_matrix"["j"]["i"]
-            );
-          END IF;
-          EXIT WHEN "j" = "dimension_v";
-          "j" := "j" + 1;
-        END LOOP;
-        EXIT WHEN "i" = "dimension_v";
-        "i" := "i" + 1;
-      END LOOP;
-      -- Find best paths:
+      RETURN (
+        CASE WHEN "tie_breaking_p" = 'simple'::"tie_breaking" THEN
+          0
+        ELSE
+          CASE WHEN "initiative1_ord_p" < "initiative2_ord_p" THEN
+            1::INT8 << 62
+          ELSE 0 END
+          +
+          CASE WHEN "tie_breaking_p" = 'variant2'::"tie_breaking" THEN
+            ("initiative2_ord_p"::INT8 << 31) - "initiative1_ord_p"::INT8
+          ELSE
+            "initiative2_ord_p"::INT8 - ("initiative1_ord_p"::INT8 << 31)
+          END
+        END
+      );
+    END;
+  $$;
+
+COMMENT ON FUNCTION "secondary_link_strength"(INT4, INT4, "tie_breaking") IS 'Calculates a secondary criterion for the defeat strength (tie-breaking of the links)';
+
+
+CREATE TYPE "link_strength" AS (
+        "primary"               INT8,
+        "secondary"             INT8 );
+
+COMMENT ON TYPE "link_strength" IS 'Type to store the defeat strength of a link between two candidates plus a secondary criterion to create unique link strengths between the candidates (needed for tie-breaking ''variant1'' and ''variant2'')';
+
+
+CREATE FUNCTION "find_best_paths"("matrix_d" "link_strength"[][])
+  RETURNS "link_strength"[][]
+  LANGUAGE 'plpgsql' IMMUTABLE AS $$
+    DECLARE
+      "dimension_v" INT4;
+      "matrix_p"    "link_strength"[][];
+      "i"           INT4;
+      "j"           INT4;
+      "k"           INT4;
+    BEGIN
+      "dimension_v" := array_upper("matrix_d", 1);
+      "matrix_p" := "matrix_d";
       "i" := 1;
       LOOP
         "j" := 1;
@@ -3817,13 +3924,13 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
             "k" := 1;
             LOOP
               IF "i" != "k" AND "j" != "k" THEN
-                IF "matrix"["j"]["i"] < "matrix"["i"]["k"] THEN
-                  IF "matrix"["j"]["i"] > "matrix"["j"]["k"] THEN
-                    "matrix"["j"]["k"] := "matrix"["j"]["i"];
+                IF "matrix_p"["j"]["i"] < "matrix_p"["i"]["k"] THEN
+                  IF "matrix_p"["j"]["i"] > "matrix_p"["j"]["k"] THEN
+                    "matrix_p"["j"]["k"] := "matrix_p"["j"]["i"];
                   END IF;
                 ELSE
-                  IF "matrix"["i"]["k"] > "matrix"["j"]["k"] THEN
-                    "matrix"["j"]["k"] := "matrix"["i"]["k"];
+                  IF "matrix_p"["i"]["k"] > "matrix_p"["j"]["k"] THEN
+                    "matrix_p"["j"]["k"] := "matrix_p"["i"]["k"];
                   END IF;
                 END IF;
               END IF;
@@ -3837,13 +3944,199 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
         EXIT WHEN "i" = "dimension_v";
         "i" := "i" + 1;
       END LOOP;
-      -- Determine order of winners:
+      RETURN "matrix_p";
+    END;
+  $$;
+
+COMMENT ON FUNCTION "find_best_paths"("link_strength"[][]) IS 'Computes the strengths of the best beat-paths from a square matrix';
+
+
+CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
+  RETURNS VOID
+  LANGUAGE 'plpgsql' VOLATILE AS $$
+    DECLARE
+      "issue_row"       "issue"%ROWTYPE;
+      "policy_row"      "policy"%ROWTYPE;
+      "dimension_v"     INT4;
+      "matrix_a"        INT4[][];  -- absolute votes
+      "matrix_d"        "link_strength"[][];  -- defeat strength (direct)
+      "matrix_p"        "link_strength"[][];  -- defeat strength (best path)
+      "matrix_t"        "link_strength"[][];  -- defeat strength (tie-breaking)
+      "matrix_f"        BOOLEAN[][];  -- forbidden link (tie-breaking)
+      "matrix_b"        BOOLEAN[][];  -- final order (who beats who)
+      "i"               INT4;
+      "j"               INT4;
+      "m"               INT4;
+      "n"               INT4;
+      "battle_row"      "battle"%ROWTYPE;
+      "rank_ary"        INT4[];
+      "rank_v"          INT4;
+      "initiative_id_v" "initiative"."id"%TYPE;
+    BEGIN
+      PERFORM "require_transaction_isolation"();
+      SELECT * INTO "issue_row"
+        FROM "issue" WHERE "id" = "issue_id_p";
+      SELECT * INTO "policy_row"
+        FROM "policy" WHERE "id" = "issue_row"."policy_id";
+      SELECT count(1) INTO "dimension_v"
+        FROM "battle_participant" WHERE "issue_id" = "issue_id_p";
+      -- create "matrix_a" with absolute number of votes in pairwise
+      -- comparison:
+      "matrix_a" := array_fill(NULL::INT4, ARRAY["dimension_v", "dimension_v"]);
+      "i" := 1;
+      "j" := 2;
+      FOR "battle_row" IN
+        SELECT * FROM "battle" WHERE "issue_id" = "issue_id_p"
+        ORDER BY
+        "winning_initiative_id" NULLS FIRST,
+        "losing_initiative_id" NULLS FIRST
+      LOOP
+        "matrix_a"["i"]["j"] := "battle_row"."count";
+        IF "j" = "dimension_v" THEN
+          "i" := "i" + 1;
+          "j" := 1;
+        ELSE
+          "j" := "j" + 1;
+          IF "j" = "i" THEN
+            "j" := "j" + 1;
+          END IF;
+        END IF;
+      END LOOP;
+      IF "i" != "dimension_v" OR "j" != "dimension_v" + 1 THEN
+        RAISE EXCEPTION 'Wrong battle count (should not happen)';
+      END IF;
+      -- store direct defeat strengths in "matrix_d" using "defeat_strength"
+      -- and "secondary_link_strength" functions:
+      "matrix_d" := array_fill(NULL::INT8, ARRAY["dimension_v", "dimension_v"]);
+      "i" := 1;
+      LOOP
+        "j" := 1;
+        LOOP
+          IF "i" != "j" THEN
+            "matrix_d"["i"]["j"] := (
+              "defeat_strength"(
+                "matrix_a"["i"]["j"],
+                "matrix_a"["j"]["i"],
+                "policy_row"."defeat_strength"
+              ),
+              "secondary_link_strength"(
+                "i",
+                "j",
+                "policy_row"."tie_breaking"
+              )
+            )::"link_strength";
+          END IF;
+          EXIT WHEN "j" = "dimension_v";
+          "j" := "j" + 1;
+        END LOOP;
+        EXIT WHEN "i" = "dimension_v";
+        "i" := "i" + 1;
+      END LOOP;
+      -- find best paths:
+      "matrix_p" := "find_best_paths"("matrix_d");
+      -- create partial order:
+      "matrix_b" := array_fill(NULL::BOOLEAN, ARRAY["dimension_v", "dimension_v"]);
+      "i" := 1;
+      LOOP
+        "j" := "i" + 1;
+        LOOP
+          IF "i" != "j" THEN
+            IF "matrix_p"["i"]["j"] > "matrix_p"["j"]["i"] THEN
+              "matrix_b"["i"]["j"] := TRUE;
+              "matrix_b"["j"]["i"] := FALSE;
+            ELSIF "matrix_p"["i"]["j"] < "matrix_p"["j"]["i"] THEN
+              "matrix_b"["i"]["j"] := FALSE;
+              "matrix_b"["j"]["i"] := TRUE;
+            END IF;
+          END IF;
+          EXIT WHEN "j" = "dimension_v";
+          "j" := "j" + 1;
+        END LOOP;
+        EXIT WHEN "i" = "dimension_v" - 1;
+        "i" := "i" + 1;
+      END LOOP;
+      -- tie-breaking by forbidding shared weakest links in beat-paths
+      -- (unless "tie_breaking" is set to 'simple', in which case tie-breaking
+      -- is performed later by initiative id):
+      IF "policy_row"."tie_breaking" != 'simple'::"tie_breaking" THEN
+        "m" := 1;
+        LOOP
+          "n" := "m" + 1;
+          LOOP
+            -- only process those candidates m and n, which are tied:
+            IF "matrix_b"["m"]["n"] ISNULL THEN
+              -- start with beat-paths prior tie-breaking:
+              "matrix_t" := "matrix_p";
+              -- start with all links allowed:
+              "matrix_f" := array_fill(FALSE, ARRAY["dimension_v", "dimension_v"]);
+              LOOP
+                -- determine (and forbid) that link that is the weakest link
+                -- in both the best path from candidate m to candidate n and
+                -- from candidate n to candidate m:
+                "i" := 1;
+                <<forbid_one_link>>
+                LOOP
+                  "j" := 1;
+                  LOOP
+                    IF "i" != "j" THEN
+                      IF "matrix_d"["i"]["j"] = "matrix_t"["m"]["n"] THEN
+                        "matrix_f"["i"]["j"] := TRUE;
+                        -- exit for performance reasons,
+                        -- as exactly one link will be found:
+                        EXIT forbid_one_link;
+                      END IF;
+                    END IF;
+                    EXIT WHEN "j" = "dimension_v";
+                    "j" := "j" + 1;
+                  END LOOP;
+                  IF "i" = "dimension_v" THEN
+                    RAISE EXCEPTION 'Did not find shared weakest link for tie-breaking (should not happen)';
+                  END IF;
+                  "i" := "i" + 1;
+                END LOOP;
+                -- calculate best beat-paths while ignoring forbidden links:
+                "i" := 1;
+                LOOP
+                  "j" := 1;
+                  LOOP
+                    IF "i" != "j" THEN
+                      "matrix_t"["i"]["j"] := CASE
+                         WHEN "matrix_f"["i"]["j"]
+                         THEN ((-1::INT8) << 63, 0)::"link_strength"  -- worst possible value
+                         ELSE "matrix_d"["i"]["j"] END;
+                    END IF;
+                    EXIT WHEN "j" = "dimension_v";
+                    "j" := "j" + 1;
+                  END LOOP;
+                  EXIT WHEN "i" = "dimension_v";
+                  "i" := "i" + 1;
+                END LOOP;
+                "matrix_t" := "find_best_paths"("matrix_t");
+                -- extend partial order, if tie-breaking was successful:
+                IF "matrix_t"["m"]["n"] > "matrix_t"["n"]["m"] THEN
+                  "matrix_b"["m"]["n"] := TRUE;
+                  "matrix_b"["n"]["m"] := FALSE;
+                  EXIT;
+                ELSIF "matrix_t"["m"]["n"] < "matrix_t"["n"]["m"] THEN
+                  "matrix_b"["m"]["n"] := FALSE;
+                  "matrix_b"["n"]["m"] := TRUE;
+                  EXIT;
+                END IF;
+              END LOOP;
+            END IF;
+            EXIT WHEN "n" = "dimension_v";
+            "n" := "n" + 1;
+          END LOOP;
+          EXIT WHEN "m" = "dimension_v" - 1;
+          "m" := "m" + 1;
+        END LOOP;
+      END IF;
+      -- store a unique ranking in "rank_ary":
       "rank_ary" := array_fill(NULL::INT4, ARRAY["dimension_v"]);
       "rank_v" := 1;
-      "done_v" := 0;
       LOOP
-        "winners_ary" := '{}';
         "i" := 1;
+        <<assign_next_rank>>
         LOOP
           IF "rank_ary"["i"] ISNULL THEN
             "j" := 1;
@@ -3851,34 +4144,32 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
               IF
                 "i" != "j" AND
                 "rank_ary"["j"] ISNULL AND
-                "matrix"["j"]["i"] > "matrix"["i"]["j"]
+                ( "matrix_b"["j"]["i"] OR
+                  -- tie-breaking by "id"
+                  ( "matrix_b"["j"]["i"] ISNULL AND
+                    "j" < "i" ) )
               THEN
                 -- someone else is better
                 EXIT;
               END IF;
               IF "j" = "dimension_v" THEN
                 -- noone is better
-                "winners_ary" := "winners_ary" || "i";
-                EXIT;
+                "rank_ary"["i"] := "rank_v";
+                EXIT assign_next_rank;
               END IF;
               "j" := "j" + 1;
             END LOOP;
           END IF;
-          EXIT WHEN "i" = "dimension_v";
           "i" := "i" + 1;
+          IF "i" > "dimension_v" THEN
+            RAISE EXCEPTION 'Schulze ranking does not compute (should not happen)';
+          END IF;
         END LOOP;
-        "i" := 1;
-        LOOP
-          "rank_ary"["winners_ary"["i"]] := "rank_v";
-          "done_v" := "done_v" + 1;
-          EXIT WHEN "i" = array_upper("winners_ary", 1);
-          "i" := "i" + 1;
-        END LOOP;
-        EXIT WHEN "done_v" = "dimension_v";
+        EXIT WHEN "rank_v" = "dimension_v";
         "rank_v" := "rank_v" + 1;
       END LOOP;
       -- write preliminary results:
-      "i" := 1;
+      "i" := 2;  -- omit status quo with "i" = 1
       FOR "initiative_id_v" IN
         SELECT "id" FROM "initiative"
         WHERE "issue_id" = "issue_id_p" AND "admitted"
@@ -3908,17 +4199,19 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
             AND "issue_row"."voter_count"-"negative_votes" >=
                 "policy_row"."indirect_majority_non_negative",
           "schulze_rank"           = "rank_ary"["i"],
-          "better_than_status_quo" = "rank_ary"["i"] < "rank_ary"["dimension_v"],
-          "worse_than_status_quo"  = "rank_ary"["i"] > "rank_ary"["dimension_v"],
-          "multistage_majority"    = "rank_ary"["i"] >= "rank_ary"["dimension_v"],
-          "reverse_beat_path"      = "matrix"["dimension_v"]["i"] >= 0,
+          "better_than_status_quo" = "rank_ary"["i"] < "rank_ary"[1],
+          "worse_than_status_quo"  = "rank_ary"["i"] > "rank_ary"[1],
+          "multistage_majority"    = "rank_ary"["i"] >= "rank_ary"[1],
+          "reverse_beat_path"      = CASE WHEN "policy_row"."defeat_strength" = 'simple'::"defeat_strength"
+                                     THEN NULL
+                                     ELSE "matrix_p"[1]["i"]."primary" >= 0 END,
           "eligible"               = FALSE,
           "winner"                 = FALSE,
           "rank"                   = NULL  -- NOTE: in cases of manual reset of issue state
           WHERE "id" = "initiative_id_v";
         "i" := "i" + 1;
       END LOOP;
-      IF "i" != "dimension_v" THEN
+      IF "i" != "dimension_v" + 1 THEN
         RAISE EXCEPTION 'Wrong winner count (should not happen)';
       END IF;
       -- take indirect majorities into account:
@@ -3993,7 +4286,7 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
           "initiative"."multistage_majority" = FALSE )
         AND (
           "policy_row"."no_reverse_beat_path" = FALSE OR
-          "initiative"."reverse_beat_path" = FALSE );
+          coalesce("initiative"."reverse_beat_path", FALSE) = FALSE );
       -- mark final winner:
       UPDATE "initiative" SET "winner" = TRUE
         FROM (
@@ -4024,7 +4317,7 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
       END LOOP;
       -- set schulze rank of status quo and mark issue as finished:
       UPDATE "issue" SET
-        "status_quo_schulze_rank" = "rank_ary"["dimension_v"],
+        "status_quo_schulze_rank" = "rank_ary"[1],
         "state" =
           CASE WHEN EXISTS (
             SELECT NULL FROM "initiative"
@@ -4321,17 +4614,14 @@ COMMENT ON FUNCTION "check_everything"() IS 'Amongst other regular tasks this fu
 CREATE FUNCTION "clean_issue"("issue_id_p" "issue"."id"%TYPE)
   RETURNS VOID
   LANGUAGE 'plpgsql' VOLATILE AS $$
-    DECLARE
-      "issue_row" "issue"%ROWTYPE;
     BEGIN
-      SELECT * INTO "issue_row"
-        FROM "issue" WHERE "id" = "issue_id_p"
-        FOR UPDATE;
-      IF "issue_row"."cleaned" ISNULL THEN
-        UPDATE "issue" SET
-          "state"  = 'voting',
-          "closed" = NULL
-          WHERE "id" = "issue_id_p";
+      IF EXISTS (
+        SELECT NULL FROM "issue" WHERE "id" = "issue_id_p" AND "cleaned" ISNULL
+      ) THEN
+        -- override protection triggers:
+        INSERT INTO "temporary_transaction_data" ("key", "value")
+          VALUES ('override_protection_triggers', TRUE::TEXT);
+        -- clean data:
         DELETE FROM "delegating_voter"
           WHERE "issue_id" = "issue_id_p";
         DELETE FROM "direct_voter"
@@ -4352,11 +4642,11 @@ CREATE FUNCTION "clean_issue"("issue_id_p" "issue"."id"%TYPE)
           USING "initiative"  -- NOTE: due to missing index on issue_id
           WHERE "initiative"."issue_id" = "issue_id_p"
           AND "supporter"."initiative_id" = "initiative_id";
-        UPDATE "issue" SET
-          "state"   = "issue_row"."state",
-          "closed"  = "issue_row"."closed",
-          "cleaned" = now()
-          WHERE "id" = "issue_id_p";
+        -- mark issue as cleaned:
+        UPDATE "issue" SET "cleaned" = now() WHERE "id" = "issue_id_p";
+        -- finish overriding protection triggers (avoids garbage):
+        DELETE FROM "temporary_transaction_data"
+          WHERE "key" = 'override_protection_triggers';
       END IF;
       RETURN;
     END;
@@ -4371,6 +4661,7 @@ CREATE FUNCTION "delete_member"("member_id_p" "member"."id"%TYPE)
     BEGIN
       UPDATE "member" SET
         "last_login"                   = NULL,
+        "last_delegation_check"        = NULL,
         "login"                        = NULL,
         "password"                     = NULL,
         "locked"                       = TRUE,
@@ -4380,6 +4671,7 @@ CREATE FUNCTION "delete_member"("member_id_p" "member"."id"%TYPE)
         "notify_email_secret"          = NULL,
         "notify_email_secret_expiry"   = NULL,
         "notify_email_lock_expiry"     = NULL,
+        "login_recovery_expiry"        = NULL,
         "password_reset_secret"        = NULL,
         "password_reset_secret_expiry" = NULL,
         "organizational_unit"          = NULL,
@@ -4428,12 +4720,14 @@ CREATE FUNCTION "delete_private_data"()
   RETURNS VOID
   LANGUAGE 'plpgsql' VOLATILE AS $$
     BEGIN
+      DELETE FROM "temporary_transaction_data";
       DELETE FROM "member" WHERE "activated" ISNULL;
       UPDATE "member" SET
         "invite_code"                  = NULL,
         "invite_code_expiry"           = NULL,
         "admin_comment"                = NULL,
         "last_login"                   = NULL,
+        "last_delegation_check"        = NULL,
         "login"                        = NULL,
         "password"                     = NULL,
         "lang"                         = NULL,
@@ -4443,6 +4737,7 @@ CREATE FUNCTION "delete_private_data"()
         "notify_email_secret_expiry"   = NULL,
         "notify_email_lock_expiry"     = NULL,
         "notify_level"                 = NULL,
+        "login_recovery_expiry"        = NULL,
         "password_reset_secret"        = NULL,
         "password_reset_secret_expiry" = NULL,
         "organizational_unit"          = NULL,

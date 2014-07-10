@@ -63,8 +63,8 @@ static void register_candidate(char **candidate_key, VISIT visit, int level) {
   if (visit == postorder || visit == leaf) {
     struct candidate *candidate;
     candidate = candidates + (candidate_count++);
-    candidate->key   = *candidate_key;
-    candidate->seat  = 0;
+    candidate->key  = *candidate_key;
+    candidate->seat = 0;
     if (logging) printf("Candidate #%i is suggestion #%s.\n", candidate_count, candidate->key);
   }
 }
