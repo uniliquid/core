@@ -7,7 +7,7 @@
 BEGIN;
 
 CREATE VIEW "liquid_feedback_version" AS
-  SELECT * FROM (VALUES ('3.0.2', 3, 0, 2))
+  SELECT * FROM (VALUES ('3.0.3', 3, 0, 3))
   AS "subquery"("string", "major", "minor", "revision");
 
 
@@ -4205,22 +4205,10 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
           SELECT count(*) FROM "direct_voter" WHERE "issue_id" = "issue_id_p"
         )
         WHERE "id" = "issue_id_p";
-      -- calculate "first_preference_votes":
-      UPDATE "initiative"
-        SET "first_preference_votes" = coalesce("subquery"."sum", 0)
-        FROM (
-          SELECT "vote"."initiative_id", sum("direct_voter"."weight")
-          FROM "vote" JOIN "direct_voter"
-          ON "vote"."issue_id" = "direct_voter"."issue_id"
-          AND "vote"."member_id" = "direct_voter"."member_id"
-          WHERE "vote"."first_preference"
-          GROUP BY "vote"."initiative_id"
-        ) AS "subquery"
-        WHERE "initiative"."issue_id" = "issue_id_p"
-        AND "initiative"."admitted"
-        AND "initiative"."id" = "subquery"."initiative_id";
       -- copy "positive_votes" and "negative_votes" from "battle" table:
+      -- NOTE: "first_preference_votes" is set to a default of 0 at this step
       UPDATE "initiative" SET
+        "first_preference_votes" = 0,
         "positive_votes" = "battle_win"."count",
         "negative_votes" = "battle_lose"."count",
         "positive_direct_votes" = "battle_win"."direct_count",
@@ -4233,6 +4221,20 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
           "battle_lose"."issue_id" = "issue_id_p" AND
           "battle_lose"."losing_initiative_id" = "initiative"."id" AND
           "battle_lose"."winning_initiative_id" ISNULL;
+      -- calculate "first_preference_votes":
+      -- NOTE: will only set values not equal to zero
+      UPDATE "initiative" SET "first_preference_votes" = "subquery"."sum"
+        FROM (
+          SELECT "vote"."initiative_id", sum("direct_voter"."weight")
+          FROM "vote" JOIN "direct_voter"
+          ON "vote"."issue_id" = "direct_voter"."issue_id"
+          AND "vote"."member_id" = "direct_voter"."member_id"
+          WHERE "vote"."first_preference"
+          GROUP BY "vote"."initiative_id"
+        ) AS "subquery"
+        WHERE "initiative"."issue_id" = "issue_id_p"
+        AND "initiative"."admitted"
+        AND "initiative"."id" = "subquery"."initiative_id";
     END;
   $$;
 
