@@ -2,7 +2,7 @@
 -- frontend's WebMCP shell (README, "Member sync"). One pass over the queue
 -- of member_sync.sql:
 -- - rows that no longer fit their member's state (view
---   member_sync_mail_stale) are deleted unsent;
+--   member_sync_mail_stale) are deleted unsent, unless replaced meanwhile;
 -- - each due row (view member_sync_mail_due), in its own transaction:
 --   the member row is locked (FOR SHARE, before the queue row, in the order
 --   the sync locks them, so a sync run waits for this mail) and the queue
@@ -30,7 +30,9 @@ end
 
 local sent, failed = 0, 0
 local ok, err = pcall(function()
-  db:query("DELETE FROM member_sync_mail WHERE member_id IN (SELECT member_id FROM member_sync_mail_stale)")
+  -- The whole key: a row the sync replaces meanwhile (new kind or time,
+  -- checked again after the row lock) is not deleted.
+  db:query("DELETE FROM member_sync_mail USING member_sync_mail_stale AS stale WHERE member_sync_mail.member_id = stale.member_id AND member_sync_mail.kind = stale.kind AND member_sync_mail.created = stale.created")
   local rows = db:query("SELECT member_id, kind, created::text AS created FROM member_sync_mail_due ORDER BY member_id")
   for i, row in ipairs(rows) do
     local key = { row.member_id, row.kind, row.created }
