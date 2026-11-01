@@ -7,21 +7,29 @@
 # member sync, README "Member sync"), a those of them who are active.
 # LF_DATABASE (default liquid_feedback) and LF_STATISTICS_DIR (default
 # /opt/liquid_feedback_statistics) may be set. Exit status 1, and nothing
-# written for that unit or the following ones, if the database cannot be
-# read.
+# written, if any count cannot be read.
 
 LF_DATABASE=${LF_DATABASE:-liquid_feedback}
 LF_STATISTICS_DIR=${LF_STATISTICS_DIR:-/opt/liquid_feedback_statistics}
 
+# All counts first: nothing is written unless every one of them is a number.
+counts=
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   n=`psql -X -At -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM privilege AS a JOIN member AS b ON a.member_id = b.id WHERE a.unit_id = $i AND a.voting_right = true AND b.locked = false" "$LF_DATABASE"` || exit 1
   a=`psql -X -At -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM privilege AS a JOIN member AS b ON a.member_id = b.id WHERE a.unit_id = $i AND a.voting_right = true AND b.locked = false AND b.active = true" "$LF_DATABASE"` || exit 1
-  # Nothing is written from a count that is not a number.
   for v in "$n" "$a"; do
     case $v in
       ''|*[!0-9]*) echo "error3! unit $i: no count" >&2; exit 1;;
     esac
   done
+  counts="$counts $n $a"
+done
+set -- $counts
+
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  n=$1
+  a=$2
+  shift 2
   if ( [ $i -eq "1" ] && [ "$n" -eq "0" ] ); then
     echo "error3! $n"
     exit 0

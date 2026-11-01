@@ -51,6 +51,20 @@ chmod("$dir-bin/psql", 0755);
 check('count not a number: exit 1, "error3!" on stderr, nothing written', $status === 1 && $stdout === ''
     && $stderr === "error3! unit 1: no count\n" && $state() === $files);
 
+// A later unit's count fails (unit 5, from a stand-in psql that passes the
+// others to the real one): exit 1, nothing written for any unit.
+mkdir("$dir-bin5");
+file_put_contents("$dir-bin5/psql", "#!/bin/sh\ncase \"\$*\" in *'unit_id = 5 '*) exit 2;; esac\nexec /usr/bin/psql \"\$@\"\n");
+chmod("$dir-bin5/psql", 0755);
+for ($i = 1; $i <= 3; $i++) {
+    $id = active_member($owner, "mv:later$i");
+    $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (1, $id)");
+}
+[$status, $stdout] = run(['sh', __DIR__ . '/../lf_voting_right_stats'],
+    ['LF_DATABASE' => $db, 'LF_STATISTICS_DIR' => $dir, 'PGUSER' => 'lqfb', 'PATH' => "$dir-bin5:" . getenv('PATH')]);
+check('a later unit fails: exit 1, nothing written for any unit', $status !== 0 && $stdout === '' && $state() === $files);
+$owner->exec("DELETE FROM member WHERE identification LIKE 'mv:later%'");
+
 // Unit 1 without voters: error3, nothing written.
 [$status, $stdout] = stats();
 check('no voters in unit 1: "error3! 0", exit 0, nothing written', $status === 0 && $stdout === "error3! 0\n" && lines(1) === ['older line']);
