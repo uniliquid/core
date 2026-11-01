@@ -3,12 +3,16 @@
 -- of member_sync.sql:
 -- - rows that no longer fit their member's state (view
 --   member_sync_mail_stale) are deleted unsent;
--- - each due row (view member_sync_mail_due): "invite" through the
---   frontend's Member:send_invitation(), "locked" and "unlocked" with the
---   texts member_sync_locked.txt and member_sync_unlocked.txt through
---   net.send_mail; the row is deleted after a successful send only (and
---   only if the sync has not replaced it meanwhile), so a failed or
---   interrupted send is retried by the next pass.
+-- - each due row (view member_sync_mail_due), in its own transaction:
+--   the member row is locked (FOR SHARE, before the queue row, in the order
+--   the sync locks them, so a sync run waits for this mail) and the queue
+--   row (FOR UPDATE); if the row was replaced or no longer fits, it is
+--   skipped. "invite" goes through the frontend's
+--   Member:send_invitation(), "locked" and "unlocked" with the texts
+--   member_sync_locked.txt and member_sync_unlocked.txt through
+--   net.send_mail; after a successful send the row is deleted and the
+--   transaction committed, otherwise rolled back (a new invite code too),
+--   so the next pass retries it.
 -- Prints "<n> sent, <n> failed"; exits with status 1 if any send failed or
 -- on any error.
 
@@ -27,9 +31,17 @@ end
 local sent, failed = 0, 0
 local ok, err = pcall(function()
   db:query("DELETE FROM member_sync_mail WHERE member_id IN (SELECT member_id FROM member_sync_mail_stale)")
-  local rows = db:query("SELECT member_id, kind, created::text AS created, notify_email FROM member_sync_mail_due ORDER BY member_id")
+  local rows = db:query("SELECT member_id, kind, created::text AS created FROM member_sync_mail_due ORDER BY member_id")
   for i, row in ipairs(rows) do
+    local key = { row.member_id, row.kind, row.created }
+    db:query("BEGIN")
     local send_ok, success = pcall(function()
+      db:query{ "SELECT NULL FROM member WHERE id = ? FOR SHARE", row.member_id }
+      db:query{ "SELECT NULL FROM member_sync_mail WHERE member_id = ? FOR UPDATE", row.member_id }
+      local due = db:query{ "SELECT notify_email FROM member_sync_mail_due WHERE member_id = ? AND kind = ? AND created = ?::timestamptz", unpack(key) }
+      if #due == 0 then
+        return "skipped"
+      end
       if row.kind == "invite" then
         return Member:by_id(row.member_id):send_invitation()
       end
@@ -37,17 +49,21 @@ local ok, err = pcall(function()
         envelope_from = config.mail_envelope_from,
         from          = config.mail_from,
         reply_to      = config.mail_reply_to,
-        to            = row.notify_email,
+        to            = due[1].notify_email,
         subject       = subjects[row.kind],
         content_type  = "text/plain; charset=UTF-8",
         content       = text(row.kind)
       }
     end)
-    if send_ok and success then
-      db:query{ "DELETE FROM member_sync_mail WHERE member_id = ? AND kind = ? AND created = ?::timestamptz", row.member_id, row.kind, row.created }
+    if send_ok and success and success ~= "skipped" then
+      db:query{ "DELETE FROM member_sync_mail WHERE member_id = ? AND kind = ? AND created = ?::timestamptz", unpack(key) }
+      db:query("COMMIT")
       sent = sent + 1
     else
-      failed = failed + 1
+      db:query("ROLLBACK")
+      if not (send_ok and success == "skipped") then
+        failed = failed + 1
+      end
     end
   end
 end)

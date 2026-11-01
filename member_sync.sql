@@ -276,9 +276,12 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
       )
       SELECT count(*) INTO "unlocked" FROM "unlocked";
       -- Eligible, not active, another address: take it, drop pending
-      -- confirmations and resets; invite again if never activated.
+      -- confirmations and resets; if never activated, revoke the invite code
+      -- sent to the old address and invite again.
       WITH "updated" AS (
         UPDATE public.member SET
+          "invite_code"                  = CASE WHEN "member"."activated" ISNULL THEN NULL ELSE "member"."invite_code" END,
+          "invite_code_expiry"           = CASE WHEN "member"."activated" ISNULL THEN NULL ELSE "member"."invite_code_expiry" END,
           "notify_email"                 = "entry"."email",
           "notify_email_unconfirmed"     = NULL,
           "notify_email_secret"          = NULL,

@@ -273,7 +273,7 @@ check('mass lock: all 30 locked', sync($db, $list)['locked'] === 30);
 // Email (R2).
 $db = synced_database();
 $owner = connect($db);
-$inactiveId = active_member($owner, 'mv:1', ['active' => false, 'notify_email_unconfirmed' => 'pending@example.org',
+$inactiveId = active_member($owner, 'mv:1', ['active' => false, 'invite_code' => 'CODE1', 'notify_email_unconfirmed' => 'pending@example.org',
     'notify_email_secret' => 'SECRET1', 'notify_email_secret_expiry' => '2030-01-01',
     'password_reset_secret' => 'RESET1', 'password_reset_secret_expiry' => '2030-01-01']);
 $activeId = active_member($owner, 'mv:2', ['notify_email_unconfirmed' => 'pending2@example.org', 'notify_email_secret' => 'SECRET2']);
@@ -290,13 +290,13 @@ check('email: inactive activated -> overwritten, pending email and secrets clear
     && $inactive['notify_email_unconfirmed'] === null && $inactive['notify_email_secret'] === null
     && $inactive['notify_email_secret_expiry'] === null && $inactive['password_reset_secret'] === null
     && $inactive['password_reset_secret_expiry'] === null);
-check('email: inactive activated -> no invite', queued($owner, $inactiveId) === null);
+check('email: inactive activated -> no invite, invite code unchanged', queued($owner, $inactiveId) === null && $inactive['invite_code'] === 'CODE1');
 $active = row($owner, 'SELECT * FROM member WHERE id = ?', [$activeId]);
 check('email: active -> unchanged', $active['notify_email'] !== 'member2@example.org' && $active['notify_email_unconfirmed'] === 'pending2@example.org'
     && $active['notify_email_secret'] === 'SECRET2');
 $never = row($owner, 'SELECT * FROM member WHERE id = ?', [$neverId]);
-check('email: never activated -> overwritten + invite', $never['notify_email'] === 'member3@example.org' && $never['password_reset_secret'] === null
-    && queued($owner, $neverId) === 'invite');
+check('email: never activated -> overwritten + invite, the old invite code revoked', $never['notify_email'] === 'member3@example.org'
+    && $never['password_reset_secret'] === null && $never['invite_code'] === null && queued($owner, $neverId) === 'invite');
 check('email: same address -> unchanged (secret kept)', row($owner, 'SELECT notify_email_secret FROM member WHERE id = ?', [$sameId])['notify_email_secret'] === 'SECRET4'
     && queued($owner, $sameId) === null);
 check('email: not eligible -> unchanged', row($owner, 'SELECT notify_email FROM member WHERE id = ?', [$ineligibleId])['notify_email'] === 'old5@example.org');

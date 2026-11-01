@@ -86,8 +86,8 @@ rows, e.g. test, service or old rows, are never touched):
   active, the invitation again if never activated and without an invite
   code;
 - eligible, not active, another email: notify_email set, pending email
-  confirmation and password reset cleared; the invitation again if never
-  activated;
+  confirmation and password reset cleared; if never activated, the old
+  invite code revoked and the invitation sent again;
 - eligible: voting_right and initiative_right in unit 1, the LO unit and
   the region units; removed in the other managed units (a row with a
   manager or polling right is kept with these two flags cleared);
@@ -150,10 +150,11 @@ which runs, in /opt/liquid_feedback_frontend,
     /opt/webmcp/bin/webmcp_shell <config>
 with LF_CORE_DIR the directory of lf_member_sync_mail. One pass: queue
 rows that no longer fit (view member_sync_mail_stale) are deleted unsent;
-each due row (view member_sync_mail_due) is sent, the invitation with the
-frontend's Member:send_invitation(), "locked" and "unlocked" with the
-texts above through net.send_mail and the frontend's mail settings; a row
-is deleted after a successful send only. Prints "<n> sent, <n> failed";
+each due row (view member_sync_mail_due) is checked again in its own
+transaction with the member and queue rows locked (a sync run waits for
+it) and sent, the invitation with the frontend's Member:send_invitation(),
+"locked" and "unlocked" with the texts above through net.send_mail and the
+frontend's mail settings; a row is deleted after a successful send only. Prints "<n> sent, <n> failed";
 exit status 1 if any send failed (the row stays queued) or on any error.
 It needs sendmail as the frontend's notification mails do.
 
