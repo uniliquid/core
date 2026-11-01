@@ -138,6 +138,11 @@ $refusals = [
     'unknown option' => member_sync($members, [], ['--dryrun']),
     'empty token' => member_sync($members, ['token' => '']),
     'token not a string' => member_sync($members, ['token' => 1]),
+    'token not hex' => member_sync($members, ['token' => strtoupper(TOKEN)]),
+    'token too short' => member_sync($members, ['token' => substr(TOKEN, 1)]),
+    'token with a line break' => member_sync($members, ['token' => TOKEN . "\n"]),
+    'URL with a line break' => member_sync($members, ['url' => 'https://127.0.0.1:' . PORT . "/liquid-members.php\r\nX-Injected: 1"]),
+    'URL with a space' => member_sync($members, ['url' => 'https://127.0.0.1:' . PORT . '/liquid-members.php x']),
     'URL not https' => member_sync($members, ['url' => 'http://127.0.0.1:' . PORT . '/liquid-members.php']),
     'URL missing' => member_sync($members, ['url' => '']),
     'URL with user info' => member_sync($members, ['url' => 'https://user@127.0.0.1:' . PORT . '/liquid-members.php']),
@@ -166,12 +171,46 @@ foreach ($refusals as $name => [$status, $stdout, $stderr]) {
 check('refused: messages', $refusals['wrong token'][2] === "member-sync: fetch failed: HTTP/1.0 403 Forbidden; nothing written\n"
     && $refusals['empty list (zero rows)'][2] === "member-sync: invalid document; nothing written\n"
     && $refusals['unknown option'][2] === "member-sync: usage: member-sync.php [--dry-run] [--secrets=<file>]; nothing written\n"
-    && $refusals['wrong database user'][2] === "member-sync: database: 08006; nothing written\n");
+    && $refusals['wrong database user'][2] === "member-sync: database: 08006; nothing written\n"
+    && $refusals['token not hex'][2] === "member-sync: the token must be 64 hex digits; nothing written\n"
+    && $refusals['token with a line break'][2] === "member-sync: the token must be 64 hex digits; nothing written\n"
+    && $refusals['URL with a space'][2] === "member-sync: the URL has control characters or spaces; nothing written\n");
+// Only member_sync()'s own texts (and the lock timeout's) are shown.
+$other = new PDOException('other');
+$other->errorInfo = ['22023', 7, "ERROR:  invalid value \"member1@example.org\"\nDETAIL: x"];
+$own = new PDOException('own');
+$own->errorInfo = ['55P03', 7, "ERROR:  member_sync: another run holds the lock\nCONTEXT: x"];
+check('error text: another 22023 message is not shown, member_sync\'s is', member_sync_database_error($other) === 'database: 22023'
+    && member_sync_database_error($own) === 'database: 55P03 (member_sync: another run holds the lock)');
 
 // Rejected by the SQL validation: rolled back.
 [$status, $stdout, $stderr] = member_sync([entry(1, 'yes')]);
-check('SQL validation: exit 1, rolled back, SQLSTATE only', $status === 1 && $stdout === ''
-    && $stderr === "member-sync: database: 22023; rolled back, nothing written\n" && state($owner) === $initial);
+check('SQL validation: exit 1, rolled back, SQLSTATE and the position and field', $status === 1 && $stdout === ''
+    && $stderr === "member-sync: database: 22023 (member_sync: entry 1: eligible not a boolean); rolled back, nothing written\n"
+    && state($owner) === $initial);
+[$status, , $stderr] = member_sync([entry(1, true, 46)]);
+check('SQL validation: an LO not in the map named as such', $status === 1
+    && $stderr === "member-sync: database: 22023 (member_sync: entry 1: lo not null and not in the map); rolled back, nothing written\n");
+
+// A row lock held elsewhere (e.g. by the mail worker) ends the run after the
+// lock timeout (60 s; shorter here): 55P03 with its text, nothing written.
+$holder = connect($db);
+$holder->beginTransaction();
+$holder->query("SELECT * FROM member WHERE id = $lockedId FOR UPDATE");
+$writer = connect($db, 'lqfb_membersync');
+try {
+    member_sync_apply($writer, json_encode($members), false, '1s');
+    $error = null;
+} catch (PDOException $e) {
+    $error = member_sync_database_error($e);
+}
+$holder->rollBack();
+unset($holder);
+check('lock timeout: 55P03 with its text, nothing written', $error === 'database: 55P03 (canceling statement due to lock timeout)'
+    && state($owner) === $initial);
+check('lock timeout: for the transaction only (SET LOCAL), 60 s by default', $writer->query('SHOW lock_timeout')->fetchColumn() === '0'
+    && !$writer->inTransaction() && (new ReflectionFunction('member_sync_apply'))->getParameters()[3]->getDefaultValue() === '60s');
+unset($writer);
 
 // The timeout (20 s; shorter here) applies to the fetch.
 try {
@@ -211,6 +250,13 @@ $synced = state($owner);
 [$status, $stdout] = member_sync($members);
 check('second run: no changes', $status === 0 && str_contains($stdout, ' 0 created, 0 unlocked, 0 locked, 0 deleted, 0 anonymised, 0 privileges granted, 0 privileges revoked, 0 emails updated') && state($owner) === $synced);
 
+// The lock timeout is for the transaction only, also after a commit.
+$writer = connect($db, 'lqfb_membersync');
+ob_start();
+member_sync_apply($writer, json_encode($members), false, '1s');
+ob_end_clean();
+check('lock timeout: not left in the session after a commit', $writer->query('SHOW lock_timeout')->fetchColumn() === '0');
+unset($writer);
 [$status] = member_sync($members, ['url' => 'https://127.0.0.1:' . PORT . '/noreason']);
 check('status line "HTTP/1.0 200": accepted', $status === 0);
 [$status] = member_sync($members, [], [], ['MEMBER_SYNC_SECRETS' => secrets_file($secrets)]);

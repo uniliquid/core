@@ -96,11 +96,14 @@ function entry($id, $eligible = true, $lo = null, $regions = [], $email = 'defau
 }
 
 // Runs public.member_sync($members) as lqfb_membersync in its own
-// transaction; the counts, or the SQLSTATE of the error. $members is
-// encoded as JSON unless it is a string.
-function sync($db, $members)
+// transaction (after the statement $setup, if any); the counts, or the
+// SQLSTATE of the error. $members is encoded as JSON unless it is a string.
+function sync($db, $members, $setup = null)
 {
     $pdo = connect($db, 'lqfb_membersync');
+    if ($setup !== null) {
+        $pdo->exec($setup);
+    }
     try {
         $statement = $pdo->prepare('SELECT * FROM public.member_sync(?)');
         $statement->execute([is_string($members) ? $members : json_encode($members)]);

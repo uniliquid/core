@@ -65,6 +65,17 @@ $refused = [
     'managed_units with a duplicate' => [LO_MAP, REGION_MAP, '[1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]'],
     'managed unit does not exist' => [LO_MAP, REGION_MAP, '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]'],
 ];
+// A map value that would end a dollar-quoted body reaches the validation as data.
+[$status, , $stderr] = apply_member_sync($db, '{"37": 2, "$b$; CREATE TABLE public.injected (); --": 2}');
+$owner = connect($db);
+check("apply refused: hostile lo_map key (validated as data, nothing injected)", $status !== 0 && str_contains($stderr, 'lo_map must map')
+    && $owner->query("SELECT to_regclass('public.injected') IS NULL")->fetchColumn());
+unset($owner);
+$hostile = <<<'JSON'
+{"AT130": 2, "x\\' $f$ $b$": 2}
+JSON;
+[$status, , $stderr] = apply_member_sync($db, LO_MAP, $hostile);
+check("apply refused: hostile region_map key with quotes and backslash (validated as data)", $status !== 0 && str_contains($stderr, 'region_map must map'));
 foreach ($refused as $name => [$lo, $regions, $managed]) {
     [$status] = apply_member_sync($db, $lo, $regions, $managed);
     $owner = connect($db);
@@ -81,6 +92,11 @@ $admin->exec('GRANT CREATE ON SCHEMA public TO PUBLIC');
 check('apply refused: PUBLIC may create in schema public', $status !== 0 && str_contains($stderr, 'CREATE')
     && $admin->query("SELECT to_regprocedure('public.member_sync(jsonb)') IS NULL")->fetchColumn());
 $admin->exec('REVOKE CREATE ON SCHEMA public FROM PUBLIC');
+$admin->exec('GRANT CREATE ON SCHEMA public TO lqfb_membersync');
+[$status, , $stderr] = apply_member_sync($db);
+check('apply refused: another role may create in schema public', $status !== 0 && str_contains($stderr, 'CREATE')
+    && $admin->query("SELECT to_regprocedure('public.member_sync(jsonb)') IS NULL")->fetchColumn());
+$admin->exec('REVOKE CREATE ON SCHEMA public FROM lqfb_membersync');
 $admin->exec('ALTER SCHEMA public OWNER TO postgres');
 [$status, , $stderr] = apply_member_sync($db);
 check('apply refused: schema public owned by another role', $status !== 0 && str_contains($stderr, 'owned')
@@ -344,6 +360,7 @@ $supporterId = active_member($owner, 'mv:5');
 $voterId = active_member($owner, 'mv:6');
 $authorOnlyId = active_member($owner, 'mv:7');
 $interestId = active_member($owner, 'mv:9');
+$commenterId = active_member($owner, 'mv:10');
 $owner->exec("INSERT INTO initiator (initiative_id, member_id) VALUES ($initiative, $coId)");
 $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (1, $coId), (12, $coId)");
 $owner->exec("INSERT INTO privilege (unit_id, member_id, polling_right) VALUES (2, $coId, TRUE)");
@@ -355,28 +372,30 @@ $owner->exec("INSERT INTO interest (issue_id, member_id) VALUES ($issue, $suppor
 $owner->exec("INSERT INTO supporter (issue_id, initiative_id, member_id, draft_id) VALUES ($issue, $initiative, $supporterId, $draft)");
 $owner->exec("INSERT INTO direct_voter (issue_id, member_id) VALUES ($issue, $voterId)");
 $owner->exec("INSERT INTO interest (issue_id, member_id) VALUES ($issue, $interestId)");
+$owner->exec("INSERT INTO issue_comment (issue_id, member_id, content) VALUES ($issue, $commenterId, 'Comment')");
 // A reference the pre-check does not list (a draft, ON DELETE RESTRICT): the
 // DELETE fails, the member is anonymised.
 $owner->exec("INSERT INTO draft (initiative_id, author_id, content) VALUES ($initiative, $authorOnlyId, 'Text 2')");
 $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (1, $plainId)");
 $stayId = active_member($owner, 'mv:8');
 $result = sync($db, [entry(8)]);
-check('leavers: counts', $result === counts(['deleted' => 2, 'anonymised' => 6, 'privileges_granted' => 1]));
+check('leavers: counts', $result === counts(['deleted' => 2, 'anonymised' => 7, 'privileges_granted' => 1]));
 check('leavers: unreferenced rows deleted', row($owner, 'SELECT count(*) AS n FROM member WHERE id IN (?, ?)', [$plainId, $neverId])['n'] === 0);
 $anonymised = $owner->query("SELECT id, identification, admin_comment, locked, active, invite_code, realname, statement, login, notify_email
-    FROM member WHERE id IN ($coId, $trusteeId, $supporterId, $voterId, $authorOnlyId, $interestId) ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
-check('leavers: referenced rows anonymised (identification and invite code NULL, Austritt, locked, profile cleared)', count($anonymised) === 6
+    FROM member WHERE id IN ($coId, $trusteeId, $supporterId, $voterId, $authorOnlyId, $interestId, $commenterId) ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+check('leavers: referenced rows anonymised (identification and invite code NULL, Austritt, locked, profile cleared)', count($anonymised) === 7
     && !array_filter($anonymised, fn ($m) => $m['identification'] !== null || $m['admin_comment'] !== 'Austritt' || $m['locked'] !== true
         || $m['active'] !== false || $m['invite_code'] !== null || $m['realname'] !== null || $m['statement'] !== null
         || $m['login'] !== null || $m['notify_email'] !== null));
 check('leavers: anonymised rows have no privileges (also unmanaged and polling), queue row or session',
-    (int) $owner->query("SELECT (SELECT count(*) FROM privilege WHERE member_id IN ($coId, $trusteeId, $supporterId, $voterId, $authorOnlyId, $interestId))
+    (int) $owner->query("SELECT (SELECT count(*) FROM privilege WHERE member_id IN ($coId, $trusteeId, $supporterId, $voterId, $authorOnlyId, $interestId, $commenterId))
         + (SELECT count(*) FROM member_sync_mail) + (SELECT count(*) FROM session)")->fetchColumn() === 0);
 check('leavers: co-initiator rows intact', (int) $owner->query("SELECT count(*) FROM initiator WHERE initiative_id = $initiative")->fetchColumn() === 2);
 check('leavers: incoming delegation intact, outgoing removed', (int) $owner->query("SELECT count(*) FROM delegation WHERE trustee_id = $trusteeId")->fetchColumn() === 1
     && (int) $owner->query("SELECT count(*) FROM delegation WHERE truster_id = $trusteeId")->fetchColumn() === 0);
 check('leavers: support and interest intact', (int) $owner->query("SELECT count(*) FROM supporter WHERE member_id = $supporterId")->fetchColumn() === 1
     && (int) $owner->query("SELECT count(*) FROM interest WHERE member_id = $interestId")->fetchColumn() === 1);
+check('leavers: issue comment intact', (int) $owner->query("SELECT count(*) FROM issue_comment WHERE member_id = $commenterId")->fetchColumn() === 1);
 check('leavers: name kept (as before)', $owner->query("SELECT name FROM member WHERE id = $coId")->fetchColumn() !== null);
 check('leavers: the listed member stays', id_of($owner, 'mv:8') === $stayId);
 check('leavers: second run, no changes (anonymised rows are no longer owned)', sync($db, [entry(8)]) === counts());
@@ -392,6 +411,22 @@ $owner->exec("CREATE FUNCTION test_fail() RETURNS trigger LANGUAGE plpgsql AS \$
 $owner->exec('CREATE CONSTRAINT TRIGGER test_fail AFTER DELETE ON member_history DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION test_fail()');
 check('deferred failure: anonymised, the run commits', sync($db, [entry(2)]) === counts(['created' => 1, 'anonymised' => 1, 'privileges_granted' => 1]));
 check('deferred failure: the row stays, anonymised', $owner->query("SELECT admin_comment FROM member WHERE id = $leaverId")->fetchColumn() === 'Austritt');
+
+// A lock timeout in the DELETE (a row it cascades to, and the anonymisation
+// does not touch, locked by another session) fails the run instead of
+// anonymising the member.
+$db = synced_database();
+$owner = connect($db);
+$leaverId = active_member($owner, 'mv:1');
+$owner->exec("INSERT INTO member_history (member_id, active, name) VALUES ($leaverId, TRUE, 'Old name')");
+$before = state($owner);
+$holder = connect($db);
+$holder->beginTransaction();
+$holder->query("SELECT * FROM member_history WHERE member_id = $leaverId FOR UPDATE");
+check('lock error in the DELETE: the run fails (55P03), nothing written', sync($db, [entry(2)], "SET lock_timeout = '1s'") === '55P03'
+    && state($owner) === $before);
+$holder->rollBack();
+unset($holder);
 
 // --- Admins --------------------------------------------------------------------
 

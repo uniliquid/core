@@ -30,8 +30,9 @@ class MemberSyncError extends Exception
 {
 }
 
-// The secrets from $file; throws unless the URL is https, the token is a
-// non-empty string and the cafile exists.
+// The secrets from $file; throws unless the URL is https without control
+// characters or spaces, the token is 64 lowercase hex digits (as the
+// add-ons' tokens) and the cafile exists.
 function member_sync_secrets($file)
 {
     if (!is_string($file) || $file === '' || !is_file($file)) {
@@ -48,8 +49,11 @@ function member_sync_secrets($file)
     if (!is_string($secrets['url'] ?? null) || !str_starts_with($secrets['url'], 'https://')) {
         throw new MemberSyncError('the URL must start with https://');
     }
-    if (!is_string($secrets['token'] ?? null) || $secrets['token'] === '') {
-        throw new MemberSyncError('no token');
+    if (preg_match('/[\x00-\x20\x7f]/', $secrets['url'])) {
+        throw new MemberSyncError('the URL has control characters or spaces');
+    }
+    if (!is_string($secrets['token'] ?? null) || !preg_match('/^[0-9a-f]{64}$/D', $secrets['token'])) {
+        throw new MemberSyncError('the token must be 64 hex digits');
     }
     if (!is_string($secrets['cafile'] ?? null) || !is_file($secrets['cafile'])) {
         throw new MemberSyncError('no cafile');
@@ -158,11 +162,14 @@ function member_sync_parse($body)
 
 // Applies $members (JSON) with public.member_sync() in one transaction
 // (rolled back for a dry run) and prints the summary after it; throws (after
-// the rollback, printing nothing) on any database error.
-function member_sync_apply($pdo, $members, $dryRun)
+// the rollback, printing nothing) on any database error. A row lock not
+// granted within $lockTimeout (e.g. held by a hung mail worker) is such an
+// error.
+function member_sync_apply($pdo, $members, $dryRun, $lockTimeout = '60s')
 {
     $pdo->beginTransaction();
     try {
+        $pdo->exec("SET LOCAL lock_timeout = '$lockTimeout'");
         $statement = $pdo->prepare('SELECT * FROM public.member_sync(?)');
         $statement->execute([$members]);
         $counts = $statement->fetch(PDO::FETCH_ASSOC);
@@ -187,6 +194,20 @@ function member_sync_apply($pdo, $members, $dryRun)
 function member_sync_sqlstate($e)
 {
     return $e->errorInfo[0] ?? $e->getCode();
+}
+
+// "database: <SQLSTATE>", for a rejected list (22023) or a lock (55P03)
+// with the first line of the message, if it is member_sync()'s own (entry
+// position and field, no data) or the lock timeout's.
+function member_sync_database_error($e)
+{
+    $state = member_sync_sqlstate($e);
+    $message = preg_replace('/^ERROR:\s+/', '', (string) strtok((string) ($e->errorInfo[2] ?? ''), "\n"));
+    if (in_array($state, ['22023', '55P03'], true)
+        && preg_match('/^(member_sync: [ -~]*|canceling statement due to lock timeout)$/D', $message)) {
+        return "database: $state ($message)";
+    }
+    return "database: $state";
 }
 
 // The run for the command line $argv and the environment $env; returns the
@@ -227,7 +248,7 @@ function member_sync_main($argv, $env)
         try {
             member_sync_apply($pdo, $members, $dryRun);
         } catch (PDOException $e) {
-            throw new MemberSyncError('database: ' . member_sync_sqlstate($e) . '; rolled back, nothing written');
+            throw new MemberSyncError(member_sync_database_error($e) . '; rolled back, nothing written');
         }
     } catch (MemberSyncError $e) {
         $message = $e->getMessage();

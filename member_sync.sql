@@ -31,7 +31,8 @@ BEGIN;
 SET LOCAL search_path = pg_catalog, public, pg_temp;
 
 -- Only the applying role (or a role it belongs to) may own schema public,
--- and PUBLIC must not create in it: the functions below resolve names in it.
+-- and no other role (nor PUBLIC) may create in it: the functions below
+-- resolve names in it.
 DO $$
   BEGIN
     IF NOT EXISTS (
@@ -41,21 +42,29 @@ DO $$
     ) THEN
       RAISE EXCEPTION 'member_sync.sql: schema public is not owned by %', current_user;
     END IF;
-    IF pg_catalog.has_schema_privilege('public', 'public', 'CREATE') THEN
-      RAISE EXCEPTION 'member_sync.sql: PUBLIC has CREATE on schema public';
+    IF EXISTS (
+      SELECT NULL FROM pg_catalog.pg_namespace, pg_catalog.aclexplode("nspacl") AS "acl"
+      WHERE "nspname" = 'public'
+      AND "acl"."privilege_type" = 'CREATE'
+      AND "acl"."grantee" <> "nspowner"
+    ) THEN
+      RAISE EXCEPTION 'member_sync.sql: a role other than the owner (or PUBLIC) has CREATE on schema public';
     END IF;
   END;
 $$;
 
 -- The maps (psql variables are not substituted inside dollar quotes, so the
--- function is generated with format()).
+-- function is generated with format(); the body is a quoted literal, %L,
+-- not dollar-quoted, so no map value can end it).
 SELECT pg_catalog.format($f$
 CREATE OR REPLACE FUNCTION public.member_sync_units()
   RETURNS JSONB
   LANGUAGE sql IMMUTABLE
   SET search_path = pg_catalog, public, pg_temp
-  AS $b$ SELECT pg_catalog.jsonb_build_object('lo', %L::jsonb, 'regions', %L::jsonb, 'managed', %L::jsonb) $b$
-$f$, :'lo_map', :'region_map', :'managed_units') \gexec
+  AS %L
+$f$, pg_catalog.format(
+  'SELECT pg_catalog.jsonb_build_object(''lo'', %L::jsonb, ''regions'', %L::jsonb, ''managed'', %L::jsonb)',
+  :'lo_map', :'region_map', :'managed_units')) \gexec
 
 DO $$
   DECLARE
@@ -375,7 +384,8 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
         INTO "privileges_revoked";
       -- Departed (not listed, not admin): deleted when nothing that matters
       -- references the row (ON DELETE CASCADE would silently drop initiators,
-      -- incoming delegations and support), otherwise anonymised.
+      -- incoming delegations, support and issue comments), otherwise
+      -- anonymised.
       "deleted" := 0;
       "anonymised" := 0;
       FOR "member_id_v" IN
@@ -393,16 +403,22 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
           EXISTS (SELECT NULL FROM public.supporter  WHERE "member_id"  = "member_id_v") OR
           EXISTS (SELECT NULL FROM public.opinion    WHERE "member_id"  = "member_id_v") OR
           EXISTS (SELECT NULL FROM public.direct_voter WHERE "member_id" = "member_id_v") OR
+          EXISTS (SELECT NULL FROM public.issue_comment WHERE "member_id" = "member_id_v") OR
           EXISTS (SELECT NULL FROM public.suggestion WHERE "author_id"  = "member_id_v") OR
           EXISTS (SELECT NULL FROM public.argument   WHERE "author_id"  = "member_id_v")
         );
         IF NOT "anonymise_v" THEN
           BEGIN
             -- Deferred triggers fire here, inside the block, not at COMMIT.
+            -- After a successful DELETE the mode stays IMMEDIATE for the rest
+            -- of the transaction (after a failed one it is rolled back with
+            -- the block); the later statements do not rely on deferral.
             SET CONSTRAINTS ALL IMMEDIATE;
             DELETE FROM public.member WHERE "id" = "member_id_v";
             "deleted" := "deleted" + 1;
-          EXCEPTION WHEN OTHERS THEN
+          -- A reference (RESTRICT/NO ACTION) or a trigger refusing it; any
+          -- other error (deadlock, lock timeout, ...) fails the run.
+          EXCEPTION WHEN integrity_constraint_violation OR raise_exception THEN
             "anonymise_v" := TRUE;
           END;
         END IF;
