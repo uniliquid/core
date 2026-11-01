@@ -402,8 +402,8 @@ CREATE TABLE "policy" (
             "admission_time" ISNULL AND "discussion_time" ISNULL AND
             "verification_time" ISNULL AND "voting_time" ISNULL ) ),
         CONSTRAINT "issue_quorum_if_and_only_if_not_polling" CHECK (
-          "polling" = "issue_quorum_num" ISNULL AND
-          "polling" = "issue_quorum_den" ISNULL ) );
+          "polling" = ("issue_quorum_num" ISNULL) AND
+          "polling" = ("issue_quorum_den" ISNULL) ) );
 CREATE INDEX "policy_active_idx" ON "policy" ("active");
 
 COMMENT ON TABLE "policy" IS 'Policies for a particular proceeding type (timelimits, quorum)';
@@ -589,7 +589,7 @@ CREATE TABLE "issue" (
         CONSTRAINT "freeze_requires_snapshot"
           CHECK ("fully_frozen" ISNULL OR "snapshot" NOTNULL),
         CONSTRAINT "set_both_or_none_of_snapshot_and_latest_snapshot_event"
-          CHECK ("snapshot" NOTNULL = "latest_snapshot_event" NOTNULL) );
+          CHECK (("snapshot" NOTNULL) = ("latest_snapshot_event" NOTNULL)) );
 CREATE INDEX "issue_area_id_idx" ON "issue" ("area_id");
 CREATE INDEX "issue_policy_id_idx" ON "issue" ("policy_id");
 CREATE INDEX "issue_created_idx" ON "issue" ("created");
@@ -666,7 +666,7 @@ CREATE TABLE "initiative" (
         "rank"                  INT4,
         "text_search_data"      TSVECTOR,
         CONSTRAINT "all_or_none_of_revoked_and_revoked_by_member_id_must_be_null"
-          CHECK ("revoked" NOTNULL = "revoked_by_member_id" NOTNULL),
+          CHECK (("revoked" NOTNULL) = ("revoked_by_member_id" NOTNULL)),
         CONSTRAINT "non_revoked_initiatives_cant_suggest_other"
           CHECK ("revoked" NOTNULL OR "suggested_initiative_id" ISNULL),
         CONSTRAINT "revoked_initiatives_cant_be_admitted"
