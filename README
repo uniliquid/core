@@ -129,7 +129,7 @@ passed with --secrets=<file> or the environment variable
 MEMBER_SYNC_SECRETS:
   <?php return [
       'url' => 'https://<Admidio internal address>:<port>/liquid-members.php',
-      'token' => '<the token of the Admidio side, 64 hex digits>',
+      'token' => '<the token of the Admidio side, 64 lowercase hex digits>',
       'cafile' => '<the Admidio certificate, PEM>',
       'dsn' => 'pgsql:dbname=liquid_feedback',
       'user' => 'lqfb_membersync',

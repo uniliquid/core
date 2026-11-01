@@ -53,7 +53,7 @@ function member_sync_secrets($file)
         throw new MemberSyncError('the URL has control characters or spaces');
     }
     if (!is_string($secrets['token'] ?? null) || !preg_match('/^[0-9a-f]{64}$/D', $secrets['token'])) {
-        throw new MemberSyncError('the token must be 64 hex digits');
+        throw new MemberSyncError('the token must be 64 lowercase hex digits');
     }
     if (!is_string($secrets['cafile'] ?? null) || !is_file($secrets['cafile'])) {
         throw new MemberSyncError('no cafile');
@@ -198,11 +198,12 @@ function member_sync_sqlstate($e)
 
 // "database: <SQLSTATE>", for a rejected list (22023) or a lock (55P03)
 // with the first line of the message, if it is member_sync()'s own (entry
-// position and field, no data) or the lock timeout's.
+// position and field, no data) or the lock timeout's (in English only).
 function member_sync_database_error($e)
 {
     $state = member_sync_sqlstate($e);
-    $message = preg_replace('/^ERROR:\s+/', '', (string) strtok((string) ($e->errorInfo[2] ?? ''), "\n"));
+    // The severity prefix ("ERROR:  ") is in the server's message language.
+    $message = preg_replace('/^[^\s:]+:\s+/u', '', (string) strtok((string) ($e->errorInfo[2] ?? ''), "\n"));
     if (in_array($state, ['22023', '55P03'], true)
         && preg_match('/^(member_sync: [ -~]*|canceling statement due to lock timeout)$/D', $message)) {
         return "database: $state ($message)";

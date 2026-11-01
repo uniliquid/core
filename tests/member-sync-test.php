@@ -172,14 +172,21 @@ check('refused: messages', $refusals['wrong token'][2] === "member-sync: fetch f
     && $refusals['empty list (zero rows)'][2] === "member-sync: invalid document; nothing written\n"
     && $refusals['unknown option'][2] === "member-sync: usage: member-sync.php [--dry-run] [--secrets=<file>]; nothing written\n"
     && $refusals['wrong database user'][2] === "member-sync: database: 08006; nothing written\n"
-    && $refusals['token not hex'][2] === "member-sync: the token must be 64 hex digits; nothing written\n"
-    && $refusals['token with a line break'][2] === "member-sync: the token must be 64 hex digits; nothing written\n"
+    && $refusals['token not hex'][2] === "member-sync: the token must be 64 lowercase hex digits; nothing written\n"
+    && $refusals['token with a line break'][2] === "member-sync: the token must be 64 lowercase hex digits; nothing written\n"
     && $refusals['URL with a space'][2] === "member-sync: the URL has control characters or spaces; nothing written\n");
 // Only member_sync()'s own texts (and the lock timeout's) are shown.
 $other = new PDOException('other');
 $other->errorInfo = ['22023', 7, "ERROR:  invalid value \"member1@example.org\"\nDETAIL: x"];
 $own = new PDOException('own');
 $own->errorInfo = ['55P03', 7, "ERROR:  member_sync: another run holds the lock\nCONTEXT: x"];
+// The severity prefix in the server's message language.
+$german = new PDOException('de');
+$german->errorInfo = ['22023', 7, "FEHLER:  member_sync: entry 2: bad id\nKONTEXT: x"];
+$cyrillic = new PDOException('ru');
+$cyrillic->errorInfo = ['22023', 7, "ОШИБКА:  member_sync: entry 3: bad id"];
+check('error text: the severity prefix is stripped in any language', member_sync_database_error($german) === 'database: 22023 (member_sync: entry 2: bad id)'
+    && member_sync_database_error($cyrillic) === 'database: 22023 (member_sync: entry 3: bad id)');
 check('error text: another 22023 message is not shown, member_sync\'s is', member_sync_database_error($other) === 'database: 22023'
     && member_sync_database_error($own) === 'database: 55P03 (member_sync: another run holds the lock)');
 
