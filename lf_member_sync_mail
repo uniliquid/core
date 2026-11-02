@@ -1,0 +1,18 @@
+#!/bin/sh
+
+# Sends the mails queued by the member sync (member_sync.sql, table
+# member_sync_mail) through the frontend, one pass (README, "Member sync"):
+#   lf_member_sync_mail <WebMCP config name>
+# Runs member_sync_mail.lua in the frontend's WebMCP shell, as the owner of
+# the LiquidFeedback tables. Prints "<n> sent, <n> failed"; exit status 1 if
+# any mail failed (it stays queued for the next pass) or on any error.
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <WebMCP config name>" >&2
+  exit 1
+fi
+
+LF_CORE_DIR=$(cd "$(dirname "$0")" && pwd) || exit 1
+export LF_CORE_DIR
+cd /opt/liquid_feedback_frontend/ || exit 1
+echo "dofile(os.getenv('LF_CORE_DIR') .. '/member_sync_mail.lua')" | /opt/webmcp/bin/webmcp_shell "$1"
