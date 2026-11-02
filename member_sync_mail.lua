@@ -4,7 +4,7 @@
 -- - rows that no longer fit their member's state (view
 --   member_sync_mail_stale) are deleted unsent, unless replaced meanwhile;
 -- - each due row (view member_sync_mail_due), in its own transaction:
---   the member row is locked (FOR SHARE, before the queue row, in the order
+--   the member row is locked (FOR UPDATE, before the queue row, in the order
 --   the sync locks them, so a sync run waits for this mail) and the queue
 --   row (FOR UPDATE); if the row was replaced or no longer fits, it is
 --   skipped. "invite" goes through the frontend's
@@ -38,7 +38,7 @@ local ok, err = pcall(function()
     local key = { row.member_id, row.kind, row.created }
     db:query("BEGIN")
     local send_ok, success = pcall(function()
-      db:query{ "SELECT NULL FROM member WHERE id = ? FOR SHARE", row.member_id }
+      db:query{ "SELECT NULL FROM member WHERE id = ? FOR UPDATE", row.member_id }
       db:query{ "SELECT NULL FROM member_sync_mail WHERE member_id = ? FOR UPDATE", row.member_id }
       local due = db:query{ "SELECT notify_email FROM member_sync_mail_due WHERE member_id = ? AND kind = ? AND created = ?::timestamptz", unpack(key) }
       if #due == 0 then

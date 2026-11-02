@@ -83,7 +83,7 @@ function db:query(q)
     error("unexpected query: " .. q)
   end
   local sql, id = q[1], q[2]
-  if sql:find("^SELECT NULL FROM member WHERE id = %? FOR SHARE$") then return {} end
+  if sql:find("^SELECT NULL FROM member WHERE id = %? FOR UPDATE$") then return {} end
   if sql:find("^SELECT NULL FROM member_sync_mail WHERE member_id = %? FOR UPDATE$") then
     -- what the sync committed while this lock was awaited
     local replacement = scenario.replace and scenario.replace[id]
