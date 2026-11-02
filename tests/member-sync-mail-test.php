@@ -108,4 +108,36 @@ $statement = $owner->prepare(array_values(array_filter($statements, fn ($sql) =>
 $statement->execute([$replacedId, 'invite', '2000-01-01 00:00:00+00']);
 check('per-row re-check: another time -> not found (skipped)', $statement->fetchAll() === []);
 
+// Two overlapping workers on the same row: the second waits at the member
+// lock (no deadlock with the first one's invite code UPDATE, as
+// send_invitation() saves it, while the second holds a lock on the member).
+$memberLock = array_values(array_filter($statements, fn ($sql) => str_starts_with($sql, 'SELECT NULL FROM member WHERE')))[0];
+$queueLock = array_values(array_filter($statements, fn ($sql) => str_starts_with($sql, 'SELECT NULL FROM member_sync_mail WHERE')))[0];
+$db = synced_database();
+$owner = connect($db);
+$id = member($owner, ['identification' => 'mv:1', 'notify_email' => 'm1@example.org']);
+$owner->exec("INSERT INTO member_sync_mail (member_id, kind) VALUES ($id, 'invite')");
+$first = connect($db);
+$first->beginTransaction();
+foreach ([$memberLock, $queueLock] as $sql) {
+    $first->prepare($sql)->execute([$id]);
+}
+$second = proc_open(['psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'lqfb', '-d', $db, '-c', 'BEGIN', '-c', str_replace('?', (string) $id, $memberLock),
+    '-c', str_replace('?', (string) $id, $queueLock), '-c', 'COMMIT'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null,
+    ['PATH' => getenv('PATH'), 'PGHOST' => SOCKET]);
+for ($try = 0; $try < 50 && (int) $owner->query("SELECT count(*) FROM pg_stat_activity WHERE datname = '$db' AND wait_event_type = 'Lock'")->fetchColumn() === 0; $try++) {
+    usleep(100000);
+}
+try {
+    $first->exec("UPDATE member SET invite_code = 'NEW' WHERE id = $id");
+    $first->commit();
+    $firstDone = true;
+} catch (PDOException $e) {
+    $firstDone = false;
+}
+stream_get_contents($pipes[1]);
+$secondStatus = proc_close($second);
+check('overlapping workers: the second waits at the member lock', $try < 50);
+check('overlapping workers: no deadlock, both complete', $firstDone && $secondStatus === 0);
+
 done();
