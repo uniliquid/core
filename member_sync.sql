@@ -153,7 +153,8 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
     "privileges_granted" INT4,
     "privileges_revoked" INT4,
     "email_updated"      INT4,
-    "no_email"           INT4 )
+    "no_email"           INT4,
+    "changes"            TEXT )
   LANGUAGE plpgsql VOLATILE SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
@@ -170,6 +171,9 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
       "member_id_v"   INT4;
       "anonymise_v"   BOOLEAN;
       "count_v"       INT4;
+      -- One line per change, 'member <id>: <action>' (member-sync.php
+      -- --verbose); the member id only, no other data.
+      "changes_v"     TEXT[] := '{}';
     BEGIN
       -- Fail fast while another run holds the lock (member-sync.php holds it
       -- as a session lock from before its fetch).
@@ -271,28 +275,37 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
       ), "queued" AS (
         INSERT INTO public.member_sync_mail ("member_id", "kind")
         SELECT "id", 'invite' FROM "new"
+        RETURNING "member_id", "kind"
       )
-      SELECT count(*) INTO "created" FROM "new";
+      SELECT (SELECT count(*) FROM "new"),
+        "changes_v" || ARRAY(SELECT 'member ' || "id" || ': created' FROM "new" ORDER BY "id")
+          || ARRAY(SELECT 'member ' || "member_id" || ': mail queued ' || "kind" FROM "queued" ORDER BY "member_id")
+        INTO "created", "changes_v";
       SELECT count(*) INTO "no_email"
         FROM jsonb_to_recordset("members_p") AS "entry" ("identification" TEXT, "eligible" BOOLEAN, "email" TEXT)
         WHERE "entry"."eligible" AND "entry"."email" ISNULL
         AND NOT EXISTS (SELECT NULL FROM public.member WHERE "identification" = "entry"."identification");
-      -- Eligible and locked: unlock; the "unlocked" mail for activated active
-      -- members, the invite again for never activated ones without a code.
+      -- Eligible and locked: unlock; the "unlocked" mail for activated
+      -- members (active or not), the invite again for never activated ones
+      -- without a code.
       WITH "unlocked" AS (
         UPDATE public.member SET "locked" = FALSE
         WHERE public.member_sync_owned("identification")
         AND "identification" = ANY ("eligible_v")
         AND "locked"
-        RETURNING "id", "activated", "active", "invite_code"
+        RETURNING "id", "activated", "invite_code"
       ), "queued" AS (
         INSERT INTO public.member_sync_mail ("member_id", "kind")
         SELECT "id", CASE WHEN "activated" NOTNULL THEN 'unlocked' ELSE 'invite' END
         FROM "unlocked"
-        WHERE ("activated" NOTNULL AND "active") OR ("activated" ISNULL AND "invite_code" ISNULL)
+        WHERE "activated" NOTNULL OR "invite_code" ISNULL
         ON CONFLICT ("member_id") DO UPDATE SET "kind" = EXCLUDED."kind", "created" = EXCLUDED."created"
+        RETURNING "member_id", "kind"
       )
-      SELECT count(*) INTO "unlocked" FROM "unlocked";
+      SELECT (SELECT count(*) FROM "unlocked"),
+        "changes_v" || ARRAY(SELECT 'member ' || "id" || ': unlocked' FROM "unlocked" ORDER BY "id")
+          || ARRAY(SELECT 'member ' || "member_id" || ': mail queued ' || "kind" FROM "queued" ORDER BY "member_id")
+        INTO "unlocked", "changes_v";
       -- Eligible, not active, another address: take it, drop pending
       -- confirmations and resets; if never activated, revoke the invite code
       -- sent to the old address and invite again.
@@ -317,8 +330,12 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
         INSERT INTO public.member_sync_mail ("member_id", "kind")
         SELECT "id", 'invite' FROM "updated" WHERE "activated" ISNULL
         ON CONFLICT ("member_id") DO UPDATE SET "kind" = EXCLUDED."kind", "created" = EXCLUDED."created"
+        RETURNING "member_id", "kind"
       )
-      SELECT count(*) INTO "email_updated" FROM "updated";
+      SELECT (SELECT count(*) FROM "updated"),
+        "changes_v" || ARRAY(SELECT 'member ' || "id" || ': email updated' FROM "updated" ORDER BY "id")
+          || ARRAY(SELECT 'member ' || "member_id" || ': mail queued ' || "kind" FROM "queued" ORDER BY "member_id")
+        INTO "email_updated", "changes_v";
       -- Privileges: unit 1, the LO unit and the region units of eligible
       -- members; the sync owns voting_right and initiative_right on the
       -- managed units of listed members and admins.
@@ -333,12 +350,18 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
             FROM jsonb_array_elements_text("entry"."regions") AS "region"
         ) AS "unit" ("id")
         WHERE "entry"."eligible";
-      INSERT INTO public.privilege ("unit_id", "member_id", "voting_right", "initiative_right")
+      WITH "granted" AS (
+        INSERT INTO public.privilege ("unit_id", "member_id", "voting_right", "initiative_right")
         SELECT "unit_id", "member_id", TRUE, TRUE
         FROM unnest("want_member_v", "want_unit_v") AS "wanted" ("member_id", "unit_id")
         ON CONFLICT ("unit_id", "member_id") DO UPDATE SET "voting_right" = TRUE, "initiative_right" = TRUE
-        WHERE NOT ("privilege"."voting_right" AND "privilege"."initiative_right");
-      GET DIAGNOSTICS "privileges_granted" = ROW_COUNT;
+        WHERE NOT ("privilege"."voting_right" AND "privilege"."initiative_right")
+        RETURNING "member_id"
+      )
+      SELECT (SELECT count(*) FROM "granted"),
+        "changes_v" || ARRAY(SELECT 'member ' || "member_id" || ': privileges +' || count(*)
+          FROM "granted" GROUP BY "member_id" ORDER BY "member_id")
+        INTO "privileges_granted", "changes_v";
       -- The removals, in a block: with removals off (member-sync.php, setting
       -- "removals") they run for their counts only and are rolled back with
       -- the block at the end (the variables keep the counts), so nothing is
@@ -357,8 +380,13 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
           INSERT INTO public.member_sync_mail ("member_id", "kind")
           SELECT "id", 'locked' FROM "locked"
           ON CONFLICT ("member_id") DO UPDATE SET "kind" = EXCLUDED."kind", "created" = EXCLUDED."created"
+          RETURNING "member_id", "kind"
         )
-        SELECT count(*) INTO "locked" FROM "locked";
+        SELECT (SELECT count(*) FROM "locked"),
+          "changes_v" || ARRAY(SELECT 'member ' || "id" || CASE WHEN "removals_p" THEN ': locked' ELSE ': would lock' END
+            FROM "locked" ORDER BY "id")
+            || ARRAY(SELECT 'member ' || "member_id" || ': mail queued ' || "kind" FROM "queued" WHERE "removals_p" ORDER BY "member_id")
+          INTO "locked", "changes_v";
         DELETE FROM public.session USING public.member
           WHERE "session"."member_id" = "member"."id"
           AND public.member_sync_owned("member"."identification")
@@ -385,17 +413,21 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
           WHERE "privilege"."unit_id" = "unwanted"."unit_id"
           AND "privilege"."member_id" = "unwanted"."member_id"
           AND NOT "unwanted"."keep"
-          RETURNING 1
+          RETURNING "privilege"."member_id"
         ), "cleared" AS (
           UPDATE public.privilege SET "voting_right" = FALSE, "initiative_right" = FALSE
           FROM "unwanted"
           WHERE "privilege"."unit_id" = "unwanted"."unit_id"
           AND "privilege"."member_id" = "unwanted"."member_id"
           AND "unwanted"."keep"
-          RETURNING 1
+          RETURNING "privilege"."member_id"
         )
-        SELECT (SELECT count(*) FROM "deleted") + (SELECT count(*) FROM "cleared")
-          INTO "privileges_revoked";
+        SELECT (SELECT count(*) FROM "deleted") + (SELECT count(*) FROM "cleared"),
+          "changes_v" || ARRAY(SELECT 'member ' || "member_id" || CASE WHEN "removals_p"
+            THEN ': privileges -' ELSE ': would revoke privileges -' END || count(*)
+            FROM (SELECT * FROM "deleted" UNION ALL SELECT * FROM "cleared") AS "revoked"
+            GROUP BY "member_id" ORDER BY "member_id")
+          INTO "privileges_revoked", "changes_v";
         -- Departed (not listed, not admin): deleted when nothing that matters
         -- references the row (ON DELETE CASCADE would silently drop initiators,
         -- incoming delegations, interest, support, opinions and issue
@@ -429,6 +461,7 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
               SET CONSTRAINTS ALL IMMEDIATE;
               DELETE FROM public.member WHERE "id" = "member_id_v";
               "deleted" := "deleted" + 1;
+              "changes_v" := "changes_v" || ('member ' || "member_id_v" || CASE WHEN "removals_p" THEN ': deleted' ELSE ': would delete' END);
             -- A reference (RESTRICT/NO ACTION) or a trigger refusing it; any
             -- other error (deadlock, lock timeout, ...) fails the run.
             EXCEPTION WHEN integrity_constraint_violation OR raise_exception THEN
@@ -447,6 +480,7 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
               "locked"             = TRUE
               WHERE "id" = "member_id_v";
             "anonymised" := "anonymised" + 1;
+            "changes_v" := "changes_v" || ('member ' || "member_id_v" || CASE WHEN "removals_p" THEN ': anonymised' ELSE ': would anonymise' END);
           END IF;
         END LOOP;
         IF NOT "removals_p" THEN
@@ -455,6 +489,7 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
       EXCEPTION WHEN SQLSTATE 'MSOFF' THEN
         NULL;
       END;
+      "changes" := array_to_string("changes_v", E'\n');
       RETURN NEXT;
     END;
   $$;

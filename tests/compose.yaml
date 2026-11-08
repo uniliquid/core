@@ -1,5 +1,5 @@
 # Test environment: PostgreSQL 17 with the LiquidFeedback schema (core.sql),
-# the roles of the member sync and test units (init.sh), and PHP 8.4 with
+# the roles of the member sync and test units (init.sh), and PHP 8.5 with
 # pdo_pgsql and psql for the tests (run.sh runs each tests/*-test.php in its
 # own container). PHP connects through the PostgreSQL socket (shared volume);
 # the test HTTPS server runs in the PHP container on 127.0.0.1; no network

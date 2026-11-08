@@ -19,10 +19,16 @@ local subjects = {
   unlocked = "[Liquid] Freischaltung des Accounts"
 }
 
+-- The text of member_sync_<kind>.txt with each #{base_url} replaced by the
+-- frontend's config.absolute_base_url (with exactly one final slash),
+-- inserted literally (a function's result, so a "%" in it is no pattern).
 local function text(kind)
   local file = assert(io.open(os.getenv("LF_CORE_DIR") .. "/member_sync_" .. kind .. ".txt", "r"))
   local content = file:read("*a")
   file:close()
+  content = content:gsub("#{base_url}", function()
+    return (assert(config.absolute_base_url, "config.absolute_base_url not set"):gsub("/+$", "")) .. "/"
+  end)
   return content
 end
 

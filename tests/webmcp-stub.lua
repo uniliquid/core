@@ -2,7 +2,9 @@
 -- config) for tests/member-sync-mail-test.php, with an in-memory member and
 -- queue table and transactions; runs member_sync_mail.lua for the scenario
 -- in STUB_SCENARIO and prints the outcome:
---   mail <to>|<subject>|<first line>   each mail handed to net.send_mail
+--   mail <to>|<subject>|<first line>   each mail handed to net.send_mail,
+--     then "  link <line>" for each line with a URL and "  placeholder left"
+--     if a "#{" is left
 --   queue <member id> <kind> <created> the queue after the pass
 --   code <member id> <invite code>     the invite codes after the pass
 --   exit <status>
@@ -102,12 +104,14 @@ function db:query(q)
   error("unexpected query: " .. sql)
 end
 
-config = { mail_envelope_from = "liquid@example.org", mail_from = { name = "Liquid", address = "liquid@example.org" },
+config = { absolute_base_url = "https://liquid.example.org/a%1b//", mail_envelope_from = "liquid@example.org", mail_from = { name = "Liquid", address = "liquid@example.org" },
   mail_reply_to = "liquid@example.org" }
 
 net = {}
 function net.send_mail(args)
   print("mail " .. args.to .. "|" .. args.subject .. "|" .. args.content:match("^[^\n]*"))
+  for line in args.content:gmatch("[^\n]*https?://[^\n]*") do print("  link " .. line) end
+  if args.content:find("#{", 1, true) then print("  placeholder left") end
   return not args.to:find("fail")
 end
 

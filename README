@@ -92,9 +92,9 @@ What the sync does, only to rows with identification 'mv:' and 64
 lowercase hex digits (all other rows, e.g. test, service or old rows, are
 never touched):
 - eligible, no row, with email: new account and an invitation;
-- eligible and locked: unlocked; the "unlocked" mail if activated and
-  active, the invitation again if never activated and without an invite
-  code;
+- eligible and locked: unlocked; the "unlocked" mail if activated
+  (active or not), the invitation again if never activated and without an
+  invite code;
 - eligible, not active, another email: notify_email set, pending email
   confirmation and password reset cleared; if never activated, the old
   invite code revoked and the invitation sent again;
@@ -155,9 +155,9 @@ of the rows: with both timers stopped, set each listed member's
 identification from the old to the new pseudonym in one transaction, then
 replace the key (a run with the new key alone is refused, see above).
 
-Running (PHP 8.4 CLI with pdo_pgsql, as lqfb_membersync, e.g. hourly by a
-systemd timer, Type=oneshot):
-$ php member-sync.php [--dry-run] [--secrets=<file>]
+Running (PHP 8.5 CLI from packages.sury.org, with pdo_pgsql, as
+lqfb_membersync, by a systemd timer every 10 minutes, Type=oneshot):
+$ php member-sync.php [--dry-run] [--verbose] [--secrets=<file>]
 It takes a session advisory lock before the fetch (a second run fails at
 once), fetches (TLS verified against the cafile only, no redirects, 20 s,
 at most 1 MiB, HTTP 200 only) and applies. stdout: one summary line with
@@ -171,7 +171,15 @@ reason, e.g. "(member_sync: entry 3: lo not null and not in the map)",
 with the entry's position and the field, no data) and exit status 1;
 nothing is written, the last state stays. A row lock not granted within
 60 s (e.g. held by a hung mail worker) is such an error.
-Mail worker (its own timer, so mails go out while the sync fails; as the
+--verbose (for runs by hand, also with --dry-run) prints, before the
+summary, one line per change with the Liquid member id only, never
+names, addresses, pseudonyms or Admidio ids: "member <id>: created",
+"unlocked", "email updated", "locked", "deleted", "anonymised",
+"privileges +<n>", "privileges -<n>", "mail queued invite|unlocked|locked";
+with removals off "would lock", "would delete", "would anonymise", "would
+revoke privileges -<n>". Without it the output is the summary line only.
+Mail worker (started right after each sync run, also after a failed one,
+so mails go out while the sync fails; as the
 owner of the tables, e.g. lqfb, with the frontend in
 /opt/liquid_feedback_frontend and WebMCP in /opt/webmcp; <config> is the
 frontend's WebMCP config name, its config/<config>.lua):
@@ -183,7 +191,9 @@ with LF_CORE_DIR the directory of lf_member_sync_mail. One pass: each
 queue row in its own transaction, with the member and queue rows locked
 (a sync run waits for it): a row that no longer fits (not in the view
 member_sync_mail_due) is deleted unsent; a due one is sent, the invitation with the frontend's Member:send_invitation(),
-"locked" and "unlocked" with the texts above through net.send_mail and the
+"locked" and "unlocked" with the texts above (each #{base_url} in them
+replaced by the frontend's config.absolute_base_url, with one final
+slash) through net.send_mail and the
 frontend's mail settings; a row is deleted after a successful send only. Prints "<n> sent, <n> failed";
 exit status 1 if any send failed (the row stays queued) or on any error.
 It needs sendmail as the frontend's notification mails do.
@@ -215,7 +225,7 @@ run, or by hand as the owner of the tables:
 Deleting or anonymising a member who left cannot be undone (backups only).
 
 Deployment needs (the deployment repository does this):
-- packages php8.4-cli and php8.4-pgsql;
+- PHP 8.5 (packages.sury.org): packages php8.5-cli and php8.5-pgsql;
 - OS user and database role lqfb_membersync (see above);
 - member_sync.sql applied on every deployment as above;
 - the Admidio certificate and the secrets file;
@@ -224,8 +234,9 @@ Deployment needs (the deployment repository does this):
   first time;
 - systemd units for member-sync.php (as lqfb_membersync) and for
   lf_member_sync_mail (as the owner of the tables, with the frontend's
-  sendmail exceptions), each with its own hourly timer, enabled as in
-  the first-run steps above (removals off until checked);
+  sendmail exceptions): the sync every 10 minutes, the mail worker
+  started right after each sync run; enabled as in the first-run steps
+  above (removals off until checked);
 - outgoing HTTPS from Liquid to the Admidio add-ons' listener allowed.
 
 Voting-right statistics: lf_voting_right_stats (e.g. hourly, after the
