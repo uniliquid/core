@@ -122,5 +122,12 @@ foreach ([
     check("command line: $name (exit 1, message)", $status === 1 && $stdout === ''
         && ($message === null ? str_starts_with($stderr, 'member-sync-migrate: fetch failed: ') : $stderr === $message));
 }
+// Any other error: a generic message, no details.
+$secrets = include "$tmp/secrets.php";
+file_put_contents("$tmp/secrets.php", '<?php return ' . var_export(['dsn' => ['x']] + $secrets, true) . ';');
+[$status, $stdout, $stderr] = run([PHP_BINARY, __DIR__ . '/../member-sync-migrate.php', '--expect=2',
+    "--legacy-key-file=$tmp/legacy", "--secrets=$tmp/secrets.php"], ['PGUSER' => 'lqfb']);
+check('command line: an uncaught error (exit 1, generic message)', $status === 1 && $stdout === ''
+    && $stderr === "member-sync-migrate: unexpected error; nothing written\n");
 
 done();

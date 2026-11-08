@@ -2,7 +2,7 @@
 
 // One-time migration to the member sync (README, "Member sync", migration),
 // run by hand once, as the owner of the LiquidFeedback tables (peer
-// authentication; the secrets file's user is not used), with both timers
+// authentication; the secrets file's user is not used), with the sync timer
 // stopped and member_sync.sql applied:
 //   php member-sync-migrate.php --expect=<n> --legacy-key-file=<file>
 //     [--dry-run] [--secrets=<file>]
@@ -272,6 +272,10 @@ function member_sync_migrate_main($argv, $env)
         }
     } catch (MemberSyncError $e) {
         fwrite(STDERR, 'member-sync-migrate: ' . $e->getMessage() . "; nothing written\n");
+        return 1;
+    } catch (Throwable $e) {
+        // Anything else: no details, which could hold data.
+        fwrite(STDERR, "member-sync-migrate: unexpected error; nothing written\n");
         return 1;
     }
     return 0;

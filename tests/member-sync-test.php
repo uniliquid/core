@@ -174,6 +174,7 @@ $refusals = [
     'pseudonym key odd length' => member_sync($members, ['pseudonym_key' => PSEUDONYM_KEY . '0']),
     'pseudonym key upper case' => member_sync($members, ['pseudonym_key' => strtoupper(PSEUDONYM_KEY)]),
     'removals neither off nor on' => member_sync($members, ['removals' => true]),
+    'dsn not a string (an uncaught error)' => member_sync($members, ['dsn' => ['x']]),
     'wrong database user' => member_sync($members, ['user' => 'nobody']),
     'wrong token' => member_sync($members, ['token' => strrev(TOKEN)]),
     'HTTP 500' => member_sync($members, ['url' => 'https://127.0.0.1:' . PORT . '/error']),
@@ -202,7 +203,8 @@ check('refused: messages', $refusals['wrong token'][2] === "member-sync: fetch f
     && $refusals['token with a line break'][2] === "member-sync: the token must be 64 lowercase hex digits; nothing written\n"
     && $refusals['URL with a space'][2] === "member-sync: the URL has control characters or spaces; nothing written\n"
     && $refusals['pseudonym key too short'][2] === "member-sync: the pseudonym key must be at least 64 lowercase hex digits (an even number); nothing written\n"
-    && $refusals['removals neither off nor on'][2] === "member-sync: removals must be 'off' or 'on'; nothing written\n");
+    && $refusals['removals neither off nor on'][2] === "member-sync: removals must be 'off' or 'on'; nothing written\n"
+    && $refusals['dsn not a string (an uncaught error)'][2] === "member-sync: unexpected error; nothing written\n");
 // Only member_sync()'s own texts (and the lock timeout's) are shown.
 $other = new PDOException('other');
 $other->errorInfo = ['22023', 7, "ERROR:  invalid value \"member1@example.org\"\nDETAIL: x"];
