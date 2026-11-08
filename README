@@ -178,8 +178,8 @@ at most 1 MiB, HTTP 200 only) and applies. stdout: one summary line with
 counts only ("<n> members: <n> created, <n> unlocked, <n> locked, ..."),
 prefixed "dry run: " for --dry-run, which rolls back. On any error: a
 message on stderr ("member-sync: <reason>; nothing written", for
-database errors only the SQLSTATE; for a rejected list (22023) or a lock (55P03) also the
-reason, e.g. "(member_sync: entry 3: lo not null and not in the map)",
+database errors only the SQLSTATE; for a rejected list (22023) or a lock
+(55P03) also the reason, e.g. "(member_sync: entry 3: lo not null and not in the map)",
 with the entry's position and the field, no data) and exit status 1;
 nothing is written, the last state stays. A row lock not granted within
 60 s (e.g. held by a hung mail worker) is such an error.
