@@ -121,8 +121,8 @@ Everything in one transaction; a second identical run changes nothing.
 Removals (locking with its sessions and "locked" mail, deactivating,
 removing rights, deleting and anonymising) only with 'removals' => 'on'
 in the secrets file; with 'off' (the default) a run does the additions
-only (new accounts, unlocks, emails, rights, invitation and "unlocked" mails) and
-reports the removals it would have done. The deployment manages the
+only (new accounts, unlocks, emails, rights, invitation and "unlocked"
+mails) and reports the removals it would have done. The deployment manages the
 setting (default off); take a database dump right before switching it on.
 Plain LiquidFeedback behaviour that follows: a voting right revoked (or a
 member locked) while an issue is in voting drops that member's vote when
