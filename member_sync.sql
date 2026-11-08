@@ -256,6 +256,21 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
         RAISE EXCEPTION 'member_sync: no listed member has a row (another key?)'
           USING ERRCODE = 'invalid_parameter_value';
       END IF;
+      -- No owned row yet, but rows with the old pseudonyms (base64, 44
+      -- characters) of members not marked 'Austritt': the migration has not
+      -- run, the first run would add a second account for each of them.
+      -- Neither (a fresh Liquid) is fine.
+      IF
+        NOT EXISTS (SELECT NULL FROM public.member WHERE public.member_sync_owned("identification")) AND
+        EXISTS (
+          SELECT NULL FROM public.member
+          WHERE "identification" ~ '^[A-Za-z0-9+/]{43}=$'
+          AND "admin_comment" IS DISTINCT FROM 'Austritt'
+        )
+      THEN
+        RAISE EXCEPTION 'member_sync: old pseudonyms not migrated (run member-sync-migrate.php first)'
+          USING ERRCODE = 'invalid_parameter_value';
+      END IF;
       SELECT array_agg("unit"::text::int4) INTO "managed_v"
         FROM jsonb_array_elements("units_v"->'managed') AS "unit";
       -- Eligible without a row: a new account (with an address) and an invite.

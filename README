@@ -247,7 +247,8 @@ pseudonym:
 the sync never manages them, so an unlocked non-admin one could log in
 and vote forever: lock it by hand.
 First runs, by hand as lqfb_membersync (runuser -u lqfb_membersync --
-php member-sync.php --secrets=<file> ...), the sync timer still off:
+php member-sync.php --secrets=<file> ...), the sync timer still off;
+it refuses while old pseudonyms are there and no row is migrated yet:
 1. a dry run (--dry-run --verbose), check the counts;
 2. a real run;
 3. the mail queue counts:

@@ -573,6 +573,24 @@ check('another key: a list that matches no owned row is rejected (22023, nothing
     sync($db, [$otherKey(1), $otherKey(2)]) === '22023' && state($owner) === $before);
 check('another key: one match is enough', is_array(sync($db, [$otherKey(1), entry(2)])));
 
+// --- Not migrated --------------------------------------------------------------
+
+// Old pseudonyms (base64, 44 characters) and no owned row: refused.
+$oldPseudonym = fn ($id) => base64_encode(hash('sha256', "old $id", true));
+$db = synced_database();
+$owner = connect($db);
+active_member($owner, $oldPseudonym(1));
+$before = state($owner);
+check('not migrated: old pseudonyms and no owned row are refused (22023, nothing written)',
+    sync($db, [entry(1), entry(2)]) === '22023' && state($owner) === $before);
+$owner->exec("UPDATE member SET admin_comment = 'Austritt'");
+check('not migrated: old pseudonyms only on Austritt rows are accepted', is_array(sync($db, [entry(1)])));
+$db = synced_database();
+check('not migrated: a fresh database (no rows) is accepted', sync($db, [entry(1), entry(2)]) === counts(['created' => 2, 'privileges_granted' => 2]));
+$owner = connect($db);
+active_member($owner, $oldPseudonym(1));
+check('not migrated: old pseudonyms next to owned rows are accepted', is_array(sync($db, [entry(1)])));
+
 // --- Voting: what the lock means for ballots (core.sql, close_voting) -----------
 
 // The lock also deactivates; close_voting counts active members only, so a

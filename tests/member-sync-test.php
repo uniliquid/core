@@ -225,6 +225,12 @@ check('SQL validation: exit 1, rolled back, SQLSTATE and the position and field'
 [$status, , $stderr] = member_sync([entry(1, true, 46)]);
 check('SQL validation: an LO not in the map named as such', $status === 1
     && $stderr === "member-sync: database: 22023 (member_sync: entry 1: lo not null and not in the map); rolled back, nothing written\n");
+// Old pseudonyms not migrated (another database): the reason shown.
+$unmigrated = synced_database();
+active_member(connect($unmigrated), base64_encode(hash('sha256', 'old 1', true)));
+[$status, , $stderr] = member_sync([entry(1)], ['dsn' => 'pgsql:host=' . SOCKET . ";dbname=$unmigrated"]);
+check('SQL validation: old pseudonyms not migrated named as such', $status === 1
+    && $stderr === "member-sync: database: 22023 (member_sync: old pseudonyms not migrated (run member-sync-migrate.php first)); rolled back, nothing written\n");
 
 // A row lock held elsewhere (e.g. by the mail worker) ends the run after the
 // lock timeout (60 s; shorter here): 55P03 with its text, nothing written.
