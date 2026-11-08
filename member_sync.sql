@@ -385,9 +385,9 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
           RETURNING "member_id", "kind"
         )
         SELECT (SELECT count(*) FROM "locked"),
-          "changes_v" || ARRAY(SELECT 'member ' || "id" || CASE WHEN "removals_p" THEN ': locked' ELSE ': would lock' END
+          "changes_v" || ARRAY(SELECT 'member ' || "id" || CASE WHEN "removals_p" IS TRUE THEN ': locked' ELSE ': would lock' END
             FROM "locked" ORDER BY "id")
-            || ARRAY(SELECT 'member ' || "member_id" || ': mail queued ' || "kind" FROM "queued" WHERE "removals_p" ORDER BY "member_id")
+            || ARRAY(SELECT 'member ' || "member_id" || ': mail queued ' || "kind" FROM "queued" WHERE "removals_p" IS TRUE ORDER BY "member_id")
           INTO "locked", "changes_v";
         -- Locked rows deactivated, also those locked earlier (LQFB counts
         -- "active" members, not unlocked ones; a login activates again).
@@ -429,7 +429,7 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
           RETURNING "privilege"."member_id"
         )
         SELECT (SELECT count(*) FROM "deleted") + (SELECT count(*) FROM "cleared"),
-          "changes_v" || ARRAY(SELECT 'member ' || "member_id" || CASE WHEN "removals_p"
+          "changes_v" || ARRAY(SELECT 'member ' || "member_id" || CASE WHEN "removals_p" IS TRUE
             THEN ': privileges -' ELSE ': would revoke privileges -' END || count(*)
             FROM (SELECT * FROM "deleted" UNION ALL SELECT * FROM "cleared") AS "revoked"
             GROUP BY "member_id" ORDER BY "member_id")
@@ -467,7 +467,7 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
               SET CONSTRAINTS ALL IMMEDIATE;
               DELETE FROM public.member WHERE "id" = "member_id_v";
               "deleted" := "deleted" + 1;
-              "changes_v" := "changes_v" || ('member ' || "member_id_v" || CASE WHEN "removals_p" THEN ': deleted' ELSE ': would delete' END);
+              "changes_v" := "changes_v" || ('member ' || "member_id_v" || CASE WHEN "removals_p" IS TRUE THEN ': deleted' ELSE ': would delete' END);
             -- A reference (RESTRICT/NO ACTION) or a trigger refusing it; any
             -- other error (deadlock, lock timeout, ...) fails the run.
             EXCEPTION WHEN integrity_constraint_violation OR raise_exception THEN
@@ -486,10 +486,10 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
               "locked"             = TRUE
               WHERE "id" = "member_id_v";
             "anonymised" := "anonymised" + 1;
-            "changes_v" := "changes_v" || ('member ' || "member_id_v" || CASE WHEN "removals_p" THEN ': anonymised' ELSE ': would anonymise' END);
+            "changes_v" := "changes_v" || ('member ' || "member_id_v" || CASE WHEN "removals_p" IS TRUE THEN ': anonymised' ELSE ': would anonymise' END);
           END IF;
         END LOOP;
-        IF NOT "removals_p" THEN
+        IF "removals_p" IS NOT TRUE THEN  -- NULL: off
           RAISE EXCEPTION 'member_sync: removals off' USING ERRCODE = 'MSOFF';
         END IF;
       EXCEPTION WHEN SQLSTATE 'MSOFF' THEN

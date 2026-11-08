@@ -126,7 +126,7 @@ function sync($db, $members, $setup = null, $removals = true)
     }
     try {
         $statement = $pdo->prepare('SELECT * FROM public.member_sync(?, ?)');
-        $statement->execute([is_string($members) ? $members : json_encode($members), $removals ? 't' : 'f']);
+        $statement->execute([is_string($members) ? $members : json_encode($members), $removals === null ? null : ($removals ? 't' : 'f')]);
         $row = $statement->fetch(PDO::FETCH_ASSOC);
         $GLOBALS['changes'] = $row['changes'] === '' ? [] : explode("\n", $row['changes']);
         unset($row['changes']);

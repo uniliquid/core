@@ -294,6 +294,15 @@ check('lock, removals off: not locked, sessions, privileges and the queued mail 
     && queued($owner, $id) === 'unlocked');
 check('lock, removals off: the new member created, invited, with unit 1', units($owner, id_of($owner, mv(2))) === [1]
     && queued($owner, id_of($owner, mv(2))) === 'invite');
+// Removals NULL: treated as off.
+$nullDb = synced_database();
+$nullOwner = connect($nullDb);
+$lockId = active_member($nullOwner, mv(1));
+$leaverId = active_member($nullOwner, mv(3));
+$nullBefore = state($nullOwner);
+$result = sync($nullDb, [entry(1, false)], null, null);
+check('removals NULL: like off (would-counts, change lines, nothing written)', $result === counts(['locked' => 1, 'deleted' => 1])
+    && $GLOBALS['changes'] === ["member $lockId: would lock", "member $leaverId: would delete"] && state($nullOwner) === $nullBefore);
 $result = sync($db, [entry(1, false, 38), entry(2)]);
 check('lock: counts', $result === counts(['locked' => 1, 'privileges_revoked' => 2]));
 check('lock: change lines', $GLOBALS['changes'] === ["member $id: locked", "member $id: mail queued locked", "member $id: privileges -2"]);
