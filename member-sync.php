@@ -1,6 +1,6 @@
 <?php
 
-// Member list from Admidio (CLI, PHP 8.4 with pdo_pgsql, run hourly by a
+// Member list from Admidio (CLI, PHP 8.5 with pdo_pgsql, run hourly by a
 // systemd timer as the user and database role lqfb_membersync):
 //   php member-sync.php [--dry-run] [--secrets=<file>]
 // Fetches the Admidio add-ons' member list for Liquid (JSON [{"id": int,
