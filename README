@@ -94,21 +94,23 @@ What the sync does, only to rows with identification 'mv:' and 64
 lowercase hex digits (all other rows, e.g. test, service or old rows, are
 never touched):
 - eligible, no row, with email: new account and an invitation;
-- eligible and locked: unlocked, an expired password reset (or one
-  without expiry) cleared, as the frontend refuses a new reset while any
-  is set; the "unlocked" mail if activated (active or not), the invitation
-  again if never activated and without an invite code;
+- every run: an expired password reset (or one without expiry) cleared,
+  as the frontend refuses a new reset while any is set;
+- eligible and locked: unlocked; the "unlocked" mail if activated
+  (active or not), the invitation again if never activated and without an
+  invite code;
 - eligible, not active, another email: notify_email set, pending email
   confirmation and password reset cleared; if never activated, the old
   invite code revoked and the invitation sent again;
 - eligible: voting_right and initiative_right in unit 1, the LO unit and
   the region units; removed in the other managed units (a row with a
   manager or polling right is kept with these two flags cleared);
-- listed and not eligible: locked and deactivated (LiquidFeedback counts
-  members with "active" and the voting right, not "locked"; a login after
-  an unlock activates again; until then the "not active" step above
-  applies), sessions deleted, rights in the managed units removed; the
-  "locked" mail when it was unlocked;
+- listed and not eligible: locked, sessions deleted, rights in the
+  managed units removed; the "locked" mail when it was unlocked;
+- locked (also locked earlier, by hand or by the old sync): deactivated
+  on every run (LiquidFeedback counts "active" members, not unlocked
+  ones; a login after an unlock activates again, until then the "not
+  active" step above applies);
 - not listed: deleted if nothing references it (initiators, delegations to
   it, interest, support, opinions, votes, suggestions, arguments, issue
   comments; or a reference that refuses the DELETE), otherwise anonymised
@@ -116,9 +118,9 @@ never touched):
   cleared, admin_comment 'Austritt', locked); an admin is only locked as
   above, never deleted or anonymised. The sync never writes the admin flag.
 Everything in one transaction; a second identical run changes nothing.
-Removals (locking with its sessions and "locked" mail, removing rights,
-deleting and anonymising) only with 'removals' => 'on' in the secrets
-file; with 'off' (the default) a run does the additions only (new
+Removals (locking with its sessions and "locked" mail, deactivating,
+removing rights, deleting and anonymising) only with 'removals' => 'on'
+in the secrets file; with 'off' (the default) a run does the additions only (new
 accounts, unlocks, emails, rights, invitation and "unlocked" mails) and
 reports the removals it would have done. The deployment manages the
 setting (default off); take a database dump right before switching it on.
@@ -126,7 +128,9 @@ Plain LiquidFeedback behaviour that follows: a voting right revoked (or a
 member locked) while an issue is in voting drops that member's vote when
 the voting closes (also after an unlock before the close, unless the
 member has logged in again since); delegations to locked or anonymised
-members lapse, as before the sync.
+members lapse, as before the sync. Incoming delegations to an anonymised
+row stay in the table (delete_member() drops only its outgoing ones);
+they are inactive and are not deleted.
 
 Database setup (once, as a superuser): the role that runs the sync,
   CREATE ROLE lqfb_membersync LOGIN;
@@ -190,9 +194,10 @@ names, addresses, pseudonyms or Admidio ids: "member <id>: created",
 "privileges +<n>", "privileges -<n>", "mail queued invite|unlocked|locked";
 with removals off "would lock", "would delete", "would anonymise", "would
 revoke privileges -<n>". Without it the output is the summary line only.
-Mail worker (chained from the sync unit with systemd OnSuccess= and
-OnFailure=, so it runs right after each sync run, also after a failed one,
-and mails go out while the sync fails; there is no separate mail timer; as the
+Mail worker (chained from the sync service, not the timer, with systemd
+OnSuccess= and OnFailure= (systemd >= 249; both may name the same unit),
+so it runs right after each sync run, also after a failed one, and mails
+go out while the sync fails; there is no separate mail timer; as the
 owner of the tables, e.g. lqfb, with the frontend in
 /opt/liquid_feedback_frontend and WebMCP in /opt/webmcp; <config> is the
 frontend's WebMCP config name, its config/<config>.lua):
@@ -222,12 +227,11 @@ adm_api/adm1.php). The order:
 4. the migration (below), dry run first;
 5. the first sync runs by hand (below), never with systemctl start, so the
    chained mail worker does not send mail early.
-For --expect, count independently, as the owner of the tables, the rows
-that hold an old pseudonym:
-  SELECT count(*) FROM member WHERE admin_comment IS DISTINCT FROM 'Austritt'
-    AND identification ~ '^[A-Za-z0-9+/]{43}=$';
-and pass it as --expect; if the dry run refuses ("<m> rows match,
-expected <n>", e.g. old rows of members no longer listed), find out why
+For --expect, an independent upper bound (equal only if every such
+member is listed), as the owner of the tables:
+  SELECT count(*) FROM member WHERE identification ~ '^[A-Za-z0-9+/]{43}=$'
+    AND admin_comment IS DISTINCT FROM 'Austritt';
+the dry run reports how many rows match; find out why any are missing
 before going on.
 As the owner of the tables (e.g. lqfb), with a copy of the secrets file
 and a file with the old key (a final line break is ignored), both
@@ -240,19 +244,24 @@ pseudonym (not 'Austritt') the new one, refused unless there are exactly
 <n> of them; clears the identification of 'Austritt' rows that still hold
 an old pseudonym; deletes the sessions and the privileges in the managed
 units of the other locked non-admin rows (the sync does not manage them).
-It prints counts only. Afterwards, check for unlocked non-admin rows the
-sync does not own (expected: test or service accounts only):
-  SELECT id, login FROM member WHERE NOT locked AND NOT admin
-    AND NOT member_sync_owned(identification) IS TRUE;
+It prints counts only. Afterwards, check the rows that still hold an old
+pseudonym:
+  SELECT id, locked, admin FROM member
+    WHERE identification ~ '^[A-Za-z0-9+/]{43}=$';
+the sync never manages them, so an unlocked non-admin one could log in
+and vote forever: lock it by hand.
 First runs, by hand as lqfb_membersync (runuser -u lqfb_membersync --
-php member-sync.php --secrets=<file> ...), the timer still off:
+php member-sync.php --secrets=<file> ...), the sync timer still off:
 1. a dry run (--dry-run --verbose);
 2. a real run with 'removals' => 'off' (the additions only);
-3. check the counts, in particular the "would ..." ones;
+3. check the counts, in particular the "would ..." ones, and the queue:
+   SELECT kind, count(*) FROM member_sync_mail GROUP BY kind;
 4. send a test mail and check it was really delivered and the postfix
-   queue is empty (mailq), then run the mail worker once by hand (as the
-   owner of the tables) and check it prints "<n> sent, 0 failed";
-5. the sync timer on; later 'removals' => 'on' (dump first, see above).
+   queue is empty (mailq);
+5. lf_member_sync_mail by hand (as the owner of the tables); it must
+   print "<n> sent, 0 failed";
+6. the sync timer on;
+7. a database dump, then 'removals' => 'on'.
 
 Recovery: an account locked by mistake is unlocked by the next correct
 run, or by hand as the owner of the tables:
@@ -276,8 +285,9 @@ Deployment needs (the deployment repository does this):
   in the first-run steps above (removals off until checked);
 - outgoing HTTPS from Liquid to the Admidio add-ons' listener allowed
   (before the migration);
-- minimal monitoring: a failed unit (an OnFailure= notice, or
-  systemctl --failed).
+- minimal monitoring: a failed unit (systemctl --failed) and the age of
+  the mail queue, SELECT min(created) FROM member_sync_mail (more than a
+  day: the worker is stuck).
 
 Voting-right statistics: lf_voting_right_stats (e.g. hourly, after the
 member sync) prepends a line per unit to
