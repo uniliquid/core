@@ -60,7 +60,7 @@ function migrate($pdo, $members, $expect, $dryRun = false, $legacyKey = LEGACY_K
     }
 }
 
-$summary = "4 members: 2 rows migrated, 2 without a row, 2 'Austritt' rows cleared, 4 sessions and 4 privileges of other locked rows deleted\n";
+$summary = "4 members: 2 rows migrated, 2 listed not migrated, 2 'Austritt' rows cleared, 4 sessions and 4 privileges of other locked rows deleted\n";
 check('dry run: the counts, nothing written', migrate($owner, $members, 2, true) === "dry run: $summary" && state($owner) === $before);
 check('another count: refused, nothing written', migrate($owner, $members, 3) === 'error: 2 rows match, expected 3' && state($owner) === $before);
 check('another legacy key: nothing matches, nothing written', migrate($owner, $members, 2, false, 'other') === 'error: 0 rows match, expected 2'

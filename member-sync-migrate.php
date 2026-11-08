@@ -217,7 +217,7 @@ function member_sync_migrate($pdo, $members, $legacyKey, $pseudonymKey, $expect,
         throw $e;
     }
     return ($dryRun ? 'dry run: ' : '') . count($members) . " members: $matched rows migrated, "
-        . (count($members) - $matched) . " without a row, $cleared 'Austritt' rows cleared, "
+        . (count($members) - $matched) . " listed not migrated, $cleared 'Austritt' rows cleared, "
         . "$sessions sessions and $privileges privileges of other locked rows deleted\n";
 }
 
