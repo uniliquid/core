@@ -6,12 +6,11 @@
 -- a row that is not due (view member_sync_mail_due: its state no longer
 -- fits) is deleted unsent, by its whole key (kind and time too, so a row
 -- the sync replaced meanwhile stays for the next pass). "invite" goes
--- through the frontend's
---   Member:send_invitation(), "locked" and "unlocked" with the texts
---   member_sync_locked.txt and member_sync_unlocked.txt through
---   net.send_mail; after a successful send the row is deleted and the
---   transaction committed, otherwise rolled back (a new invite code too),
---   so the next pass retries it.
+-- through the frontend's Member:send_invitation(), "locked" and "unlocked"
+-- with the texts member_sync_locked.txt and member_sync_unlocked.txt
+-- through net.send_mail; after a successful send the row is deleted and
+-- the transaction committed, otherwise rolled back (a new invite code too),
+-- so the next pass retries it.
 -- Prints "<n> sent, <n> failed"; exits with status 1 if any send failed or
 -- on any error.
 

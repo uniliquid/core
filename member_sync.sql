@@ -423,9 +423,9 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
           IF NOT "anonymise_v" THEN
             BEGIN
               -- Deferred triggers fire here, inside the block, not at COMMIT.
-              -- After a successful DELETE the mode stays IMMEDIATE for the rest
-              -- of the transaction (after a failed one it is rolled back with
-              -- the block); the later statements do not rely on deferral.
+              -- The mode is rolled back with the block (or, with removals off,
+              -- the outer one); otherwise it stays IMMEDIATE, and the later
+              -- statements do not rely on deferral.
               SET CONSTRAINTS ALL IMMEDIATE;
               DELETE FROM public.member WHERE "id" = "member_id_v";
               "deleted" := "deleted" + 1;

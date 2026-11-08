@@ -221,13 +221,16 @@ function member_sync_apply($pdo, $members, $dryRun, $removals, $lockTimeout = '6
         $pdo->rollBack();
         throw $e;
     }
-    $removed = $removals
-        ? "{$counts['locked']} locked, {$counts['deleted']} deleted, {$counts['anonymised']} anonymised, "
-        : "would lock {$counts['locked']}, would delete {$counts['deleted']}, would anonymise {$counts['anonymised']}, ";
+    if ($removals) {
+        $removed = "{$counts['locked']} locked, {$counts['deleted']} deleted, {$counts['anonymised']} anonymised";
+        $revoked = "{$counts['privileges_revoked']} privileges revoked";
+    } else {
+        $removed = "would lock {$counts['locked']}, would delete {$counts['deleted']}, would anonymise {$counts['anonymised']}";
+        $revoked = "would revoke {$counts['privileges_revoked']} privileges";
+    }
     echo ($dryRun ? 'dry run: ' : '') . count(json_decode($members)) . ' members: '
-        . "{$counts['created']} created, {$counts['unlocked']} unlocked, $removed"
-        . "{$counts['privileges_granted']} privileges granted, "
-        . ($removals ? "{$counts['privileges_revoked']} privileges revoked, " : "would revoke {$counts['privileges_revoked']} privileges, ")
+        . "{$counts['created']} created, {$counts['unlocked']} unlocked, $removed, "
+        . "{$counts['privileges_granted']} privileges granted, $revoked, "
         . "{$counts['email_updated']} emails updated, {$counts['no_email']} without email\n";
 }
 
