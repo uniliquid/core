@@ -20,19 +20,15 @@ local subjects = {
 }
 
 -- The text of member_sync_<kind>.txt with each #{base_url} replaced by the
--- frontend's config.absolute_base_url (with exactly one final slash); a
--- plain replacement, no pattern.
+-- frontend's config.absolute_base_url (with exactly one final slash),
+-- inserted literally (a function's result, so a "%" in it is no pattern).
 local function text(kind)
   local file = assert(io.open(os.getenv("LF_CORE_DIR") .. "/member_sync_" .. kind .. ".txt", "r"))
   local content = file:read("*a")
   file:close()
-  local placeholder = "#{base_url}"
-  local start = content:find(placeholder, 1, true)
-  local base_url = start and assert(config.absolute_base_url, "config.absolute_base_url not set"):gsub("/+$", "") .. "/"
-  while start do
-    content = content:sub(1, start - 1) .. base_url .. content:sub(start + #placeholder)
-    start = content:find(placeholder, start + #base_url, true)
-  end
+  content = content:gsub("#{base_url}", function()
+    return (assert(config.absolute_base_url, "config.absolute_base_url not set"):gsub("/+$", "")) .. "/"
+  end)
   return content
 end
 
