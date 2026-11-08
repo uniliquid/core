@@ -115,8 +115,11 @@ never touched):
 Everything in one transaction; a second identical run changes nothing.
 The sync is non-destructive: it never deletes or anonymises a member and
 never deletes a privilege row, so a later run (or an admin) can reverse
-what it did; it only ends sessions and clears expired password resets. The sync never writes the admin flag. A member who left
-stays a locked row, with its notify_email still stored. Anonymising one
+locks and rights. Not reversible, but no data loss: ended sessions,
+cleared expired resets, and for an inactive member with a new address
+the old address, pending confirmations and resets (and a never-activated
+member's invite code). The sync never writes the admin flag. A member
+who left stays a locked row, with its notify_email still stored. Anonymising one
 (e.g. on an erasure request) is a manual step, as the owner of the
 tables, with LiquidFeedback's delete_member(<id>) (it also clears the
 address).
@@ -174,8 +177,8 @@ once), fetches (TLS verified against the cafile only, no redirects, 20 s,
 at most 1 MiB, HTTP 200 only) and applies. stdout: one summary line with
 counts only ("<n> members: <n> created, <n> unlocked, <n> locked, ..."),
 prefixed "dry run: " for --dry-run, which rolls back. On any error: a
-message on stderr ("member-sync: <reason>; nothing written", for database errors only
-the SQLSTATE; for a rejected list (22023) or a lock (55P03) also the
+message on stderr ("member-sync: <reason>; nothing written", for
+database errors only the SQLSTATE; for a rejected list (22023) or a lock (55P03) also the
 reason, e.g. "(member_sync: entry 3: lo not null and not in the map)",
 with the entry's position and the field, no data) and exit status 1;
 nothing is written, the last state stays. A row lock not granted within
@@ -184,7 +187,8 @@ nothing is written, the last state stays. A row lock not granted within
 summary, one line per change with the Liquid member id only, never
 names, addresses, pseudonyms or Admidio ids: "member <id>: created",
 "unlocked", "email updated", "locked", "privileges +<n>",
-"privileges -<n>", "mail queued invite|unlocked|locked". Without it the output is the summary line only.
+"privileges -<n>", "mail queued invite|unlocked|locked". Without it the
+output is the summary line only.
 Mail worker (chained from the sync service, not the timer, with systemd
 OnSuccess= and OnFailure= (systemd >= 249; both may name the same unit),
 so it runs right after each sync run, also after a failed one, and mails
