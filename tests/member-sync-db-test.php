@@ -11,9 +11,8 @@ require __DIR__ . '/lib.php';
 [$status, , $stderr] = apply_member_sync($db = database());
 check('apply: the deployment command line succeeds', $status === 0 && $stderr === '');
 $owner = connect($db);
-check('apply: function, queue table and views exist', $owner->query("SELECT to_regprocedure('public.member_sync(jsonb)') IS NOT NULL
-    AND to_regclass('public.member_sync_mail') IS NOT NULL AND to_regclass('public.member_sync_mail_due') IS NOT NULL
-    AND to_regclass('public.member_sync_mail_stale') IS NOT NULL")->fetchColumn());
+check('apply: function, queue table and view exist', $owner->query("SELECT to_regprocedure('public.member_sync(jsonb, boolean)') IS NOT NULL
+    AND to_regclass('public.member_sync_mail') IS NOT NULL AND to_regclass('public.member_sync_mail_due') IS NOT NULL")->fetchColumn());
 unset($owner);
 [$status] = apply_member_sync($db);
 check('apply: a second apply succeeds (idempotent)', $status === 0);
@@ -89,17 +88,17 @@ $admin = connect($db, 'postgres');
 $admin->exec('GRANT CREATE ON SCHEMA public TO PUBLIC');
 [$status, , $stderr] = apply_member_sync($db);
 check('apply refused: PUBLIC may create in schema public', $status !== 0 && str_contains($stderr, 'CREATE')
-    && $admin->query("SELECT to_regprocedure('public.member_sync(jsonb)') IS NULL")->fetchColumn());
+    && $admin->query("SELECT to_regprocedure('public.member_sync(jsonb, boolean)') IS NULL")->fetchColumn());
 $admin->exec('REVOKE CREATE ON SCHEMA public FROM PUBLIC');
 $admin->exec('GRANT CREATE ON SCHEMA public TO lqfb_membersync');
 [$status, , $stderr] = apply_member_sync($db);
 check('apply refused: another role may create in schema public', $status !== 0 && str_contains($stderr, 'CREATE')
-    && $admin->query("SELECT to_regprocedure('public.member_sync(jsonb)') IS NULL")->fetchColumn());
+    && $admin->query("SELECT to_regprocedure('public.member_sync(jsonb, boolean)') IS NULL")->fetchColumn());
 $admin->exec('REVOKE CREATE ON SCHEMA public FROM lqfb_membersync');
 $admin->exec('ALTER SCHEMA public OWNER TO postgres');
 [$status, , $stderr] = apply_member_sync($db);
 check('apply refused: schema public owned by another role', $status !== 0 && str_contains($stderr, 'owned')
-    && $admin->query("SELECT to_regprocedure('public.member_sync(jsonb)') IS NULL")->fetchColumn());
+    && $admin->query("SELECT to_regprocedure('public.member_sync(jsonb, boolean)') IS NULL")->fetchColumn());
 unset($admin);
 
 // Privileges: lqfb_membersync may only execute public.member_sync().
@@ -109,9 +108,9 @@ active_member($owner, mv(1));
 $admin = connect($db, 'postgres');
 $admin->exec('CREATE ROLE other_' . getmypid() . ' LOGIN');
 $grants = $admin->query("SELECT
-    has_function_privilege('lqfb_membersync', 'public.member_sync(jsonb)', 'EXECUTE'),
+    has_function_privilege('lqfb_membersync', 'public.member_sync(jsonb, boolean)', 'EXECUTE'),
     has_function_privilege('lqfb_membersync', 'public.member_sync_units()', 'EXECUTE'),
-    has_function_privilege('other_" . getmypid() . "', 'public.member_sync(jsonb)', 'EXECUTE'),
+    has_function_privilege('other_" . getmypid() . "', 'public.member_sync(jsonb, boolean)', 'EXECUTE'),
     (SELECT count(*) FROM information_schema.role_table_grants WHERE grantee IN ('lqfb_membersync', 'PUBLIC')
         AND table_schema = 'public'),
     (SELECT count(*) FROM information_schema.role_routine_grants WHERE grantee IN ('lqfb_membersync', 'PUBLIC')
@@ -255,15 +254,26 @@ $id = active_member($owner, mv(1), ['notify_email' => 'member1@example.org']);
 $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (1, $id), (6, $id)");
 $owner->exec("INSERT INTO session (ident, member_id) VALUES ('s1', $id), ('s2', $id)");
 $owner->exec("INSERT INTO member_sync_mail (member_id, kind) VALUES ($id, 'unlocked')");
-$result = sync($db, [entry(1, false, 38)]);
+// Removals off: the additions (a new member) only; the lock, its mail, the
+// session deletion and the revokes counted, not done.
+$before = row($owner, 'SELECT * FROM member WHERE id = ?', [$id]);
+$result = sync($db, [entry(1, false, 38), entry(2)], null, false);
+check('lock, removals off: the would-counts and the additions', $result === counts(['created' => 1, 'locked' => 1,
+    'privileges_granted' => 1, 'privileges_revoked' => 2]));
+check('lock, removals off: not locked, sessions, privileges and the queued mail kept', row($owner, 'SELECT * FROM member WHERE id = ?', [$id]) === $before
+    && count(privileges($owner, $id)) === 2 && (int) $owner->query("SELECT count(*) FROM session WHERE member_id = $id")->fetchColumn() === 2
+    && queued($owner, $id) === 'unlocked');
+check('lock, removals off: the new member created, invited, with unit 1', units($owner, id_of($owner, mv(2))) === [1]
+    && queued($owner, id_of($owner, mv(2))) === 'invite');
+$result = sync($db, [entry(1, false, 38), entry(2)]);
 check('lock: counts', $result === counts(['locked' => 1, 'privileges_revoked' => 2]));
 $locked = row($owner, 'SELECT * FROM member WHERE id = ?', [$id]);
 check('lock: locked, sessions and privileges gone', $locked['locked'] === true && privileges($owner, $id) === []
     && (int) $owner->query("SELECT count(*) FROM session WHERE member_id = $id")->fetchColumn() === 0);
 check('lock: profile and email kept', $locked['name'] !== null && $locked['notify_email'] === 'member1@example.org' && $locked['active'] === true);
-check('lock: "locked" mail replaces the pending "unlocked" one (one row)', column($owner, 'SELECT kind FROM member_sync_mail') === ['locked']);
-check('lock: "locked" mail due', column($owner, 'SELECT kind FROM member_sync_mail_due') === ['locked']);
-check('lock: second run, no changes', sync($db, [entry(1, false, 38)]) === counts());
+check('lock: "locked" mail replaces the pending "unlocked" one (one row)', queued($owner, $id) === 'locked');
+check('lock: "locked" mail due', column($owner, 'SELECT kind FROM member_sync_mail_due WHERE member_id = ?', [$id]) === ['locked']);
+check('lock: second run, no changes', sync($db, [entry(1, false, 38), entry(2)]) === counts());
 
 // Reconcile: an already-locked row with leftover sessions and rights.
 $db = synced_database();
@@ -360,6 +370,8 @@ $voterId = active_member($owner, mv(6));
 $authorOnlyId = active_member($owner, mv(7));
 $interestId = active_member($owner, mv(9));
 $commenterId = active_member($owner, mv(10));
+$suggesterId = active_member($owner, mv(11));
+$arguerId = active_member($owner, mv(12));
 $owner->exec("INSERT INTO initiator (initiative_id, member_id) VALUES ($initiative, $coId)");
 $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (1, $coId), (12, $coId)");
 $owner->exec("INSERT INTO privilege (unit_id, member_id, polling_right) VALUES (2, $coId, TRUE)");
@@ -372,22 +384,33 @@ $owner->exec("INSERT INTO supporter (issue_id, initiative_id, member_id, draft_i
 $owner->exec("INSERT INTO direct_voter (issue_id, member_id) VALUES ($issue, $voterId)");
 $owner->exec("INSERT INTO interest (issue_id, member_id) VALUES ($issue, $interestId)");
 $owner->exec("INSERT INTO issue_comment (issue_id, member_id, content) VALUES ($issue, $commenterId, 'Comment')");
-// A reference the pre-check does not list (a draft, ON DELETE RESTRICT): the
-// DELETE fails, the member is anonymised.
+// References the pre-check does not list (a vote, a draft, a suggestion, an
+// argument; ON DELETE RESTRICT): the DELETE fails, the member is anonymised.
 $owner->exec("INSERT INTO draft (initiative_id, author_id, content) VALUES ($initiative, $authorOnlyId, 'Text 2')");
+// A suggestion needs an opinion (of a supporter; the author, who stays).
+$owner->exec("INSERT INTO interest (issue_id, member_id) VALUES ($issue, $authorId);
+    INSERT INTO supporter (issue_id, initiative_id, member_id, draft_id) VALUES ($issue, $initiative, $authorId, $draft);
+    INSERT INTO suggestion (initiative_id, author_id, name) VALUES ($initiative, $suggesterId, 'Suggestion');
+    INSERT INTO opinion (initiative_id, suggestion_id, member_id, degree) SELECT $initiative, max(id), $authorId, 1 FROM suggestion");
+$owner->exec("INSERT INTO argument (initiative_id, author_id, name, side) VALUES ($initiative, $arguerId, 'Argument', 'pro')");
 $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (1, $plainId)");
 $stayId = active_member($owner, mv(8));
+$before = state($owner);
+check('leavers, removals off: the counts, nothing written', sync($db, [entry(8)], null, false)
+    === counts(['deleted' => 2, 'anonymised' => 9, 'privileges_granted' => 1]));
+$owner->exec("DELETE FROM privilege WHERE member_id = $stayId");
+check('leavers, removals off: only the privilege granted', state($owner) === $before);
 $result = sync($db, [entry(8)]);
-check('leavers: counts', $result === counts(['deleted' => 2, 'anonymised' => 7, 'privileges_granted' => 1]));
+check('leavers: counts', $result === counts(['deleted' => 2, 'anonymised' => 9, 'privileges_granted' => 1]));
 check('leavers: unreferenced rows deleted', row($owner, 'SELECT count(*) AS n FROM member WHERE id IN (?, ?)', [$plainId, $neverId])['n'] === 0);
 $anonymised = $owner->query("SELECT id, identification, admin_comment, locked, active, invite_code, realname, statement, login, notify_email
-    FROM member WHERE id IN ($coId, $trusteeId, $supporterId, $voterId, $authorOnlyId, $interestId, $commenterId) ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
-check('leavers: referenced rows anonymised (identification and invite code NULL, Austritt, locked, profile cleared)', count($anonymised) === 7
+    FROM member WHERE id IN ($coId, $trusteeId, $supporterId, $voterId, $authorOnlyId, $interestId, $commenterId, $suggesterId, $arguerId) ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+check('leavers: referenced rows anonymised (identification and invite code NULL, Austritt, locked, profile cleared)', count($anonymised) === 9
     && !array_filter($anonymised, fn ($m) => $m['identification'] !== null || $m['admin_comment'] !== 'Austritt' || $m['locked'] !== true
         || $m['active'] !== false || $m['invite_code'] !== null || $m['realname'] !== null || $m['statement'] !== null
         || $m['login'] !== null || $m['notify_email'] !== null));
 check('leavers: anonymised rows have no privileges (also unmanaged and polling), queue row or session',
-    (int) $owner->query("SELECT (SELECT count(*) FROM privilege WHERE member_id IN ($coId, $trusteeId, $supporterId, $voterId, $authorOnlyId, $interestId, $commenterId))
+    (int) $owner->query("SELECT (SELECT count(*) FROM privilege WHERE member_id IN ($coId, $trusteeId, $supporterId, $voterId, $authorOnlyId, $interestId, $commenterId, $suggesterId, $arguerId))
         + (SELECT count(*) FROM member_sync_mail) + (SELECT count(*) FROM session)")->fetchColumn() === 0);
 check('leavers: co-initiator rows intact', (int) $owner->query("SELECT count(*) FROM initiator WHERE initiative_id = $initiative")->fetchColumn() === 2);
 check('leavers: incoming delegation intact, outgoing removed', (int) $owner->query("SELECT count(*) FROM delegation WHERE trustee_id = $trusteeId")->fetchColumn() === 1
@@ -526,7 +549,7 @@ check('queue: the unlock queues the invite again', queued($owner, $id) === 'invi
 $owner->exec("UPDATE member SET invite_code = 'SAVED' WHERE id = $id");
 check('queue: a saved code without a delivered mail stays due', column($owner, 'SELECT kind FROM member_sync_mail_due') === ['invite']);
 
-// Due only while the state fits the kind; everything else is stale.
+// Due only while the state fits the kind (the worker deletes the others).
 $db = synced_database();
 $owner = connect($db);
 $cases = [
@@ -549,10 +572,8 @@ foreach ($cases as $name => [$fields, $kind, $due]) {
     $expected[$name] = [$memberId, $due];
 }
 $dueIds = array_map('intval', column($owner, 'SELECT member_id FROM member_sync_mail_due'));
-$staleIds = array_map('intval', column($owner, 'SELECT member_id FROM member_sync_mail_stale'));
 foreach ($expected as $name => [$memberId, $due]) {
-    check("queue view: $name -> " . ($due ? 'due' : 'stale'), in_array($memberId, $due ? $dueIds : $staleIds, true)
-        && !in_array($memberId, $due ? $staleIds : $dueIds, true));
+    check("queue view: $name -> " . ($due ? 'due' : 'not due'), in_array($memberId, $dueIds, true) === $due);
 }
 check('queue view: due rows have the address and kind', array_keys(row($owner, 'SELECT * FROM member_sync_mail_due LIMIT 1'))
     === ['member_id', 'kind', 'created', 'notify_email']);

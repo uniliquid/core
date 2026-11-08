@@ -104,12 +104,12 @@ function entry($id, $eligible = true, $lo = null, $regions = [], $email = 'defau
         'email' => $email === 'default' ? "member$id@example.org" : $email, 'regions' => $regions];
 }
 
-// Runs public.member_sync($members) as lqfb_membersync in its own
+// Runs public.member_sync($members, $removals) as lqfb_membersync in its own
 // transaction (after the statement $setup, if any); the counts, or the
 // SQLSTATE of the error. $members is encoded as JSON unless it is a string,
 // with each "id" replaced by "identification" => mv(id) as member-sync.php
 // does (unless the entry has an identification).
-function sync($db, $members, $setup = null)
+function sync($db, $members, $setup = null, $removals = true)
 {
     if (!is_string($members)) {
         $members = array_map(function ($entry) {
@@ -125,8 +125,8 @@ function sync($db, $members, $setup = null)
         $pdo->exec($setup);
     }
     try {
-        $statement = $pdo->prepare('SELECT * FROM public.member_sync(?)');
-        $statement->execute([is_string($members) ? $members : json_encode($members)]);
+        $statement = $pdo->prepare('SELECT * FROM public.member_sync(?, ?)');
+        $statement->execute([is_string($members) ? $members : json_encode($members), $removals ? 't' : 'f']);
         return array_map('intval', $statement->fetch(PDO::FETCH_ASSOC));
     } catch (PDOException $e) {
         return $e->getCode();
