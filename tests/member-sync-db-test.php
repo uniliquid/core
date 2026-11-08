@@ -203,8 +203,11 @@ check('accepted: lo null and regions empty', is_array(sync(synced_database(), [e
 $db = synced_database();
 $owner = connect($db);
 $result = sync($db, [entry(1, true, 38, ['AT130']), entry(2, true, null, [], null), entry(3, false)]);
+$changes = $GLOBALS['changes'];
 check('create: counts (created, privileges, no email)', $result === counts(['created' => 1, 'privileges_granted' => 3, 'no_email' => 1]));
 $new = row($owner, "SELECT * FROM member WHERE identification = ?", [mv(1)]);
+check('create: change lines', $changes === ["member {$new['id']}: created", "member {$new['id']}: mail queued invite",
+    "member {$new['id']}: privileges +3"]);
 check('create: row with mv:<pseudonym> and the email, unlocked, not active', $new !== false && $new['notify_email'] === 'member1@example.org'
     && $new['locked'] === false && $new['active'] === false && $new['activated'] === null && $new['invite_code'] === null);
 check('create: units 1, LO and region', units($owner, $new['id']) === [1, 2, 6]);
@@ -240,10 +243,14 @@ $codeId = member($owner, ['identification' => mv(4), 'locked' => true, 'notify_e
 $owner->exec("UPDATE member SET notify_email = 'member1@example.org' WHERE id = $activeId");
 $result = sync($db, [entry(1), entry(2), entry(3), entry(4)]);
 check('unlock: counts', $result === counts(['unlocked' => 4, 'privileges_granted' => 4]));
+check('unlock: change lines', $GLOBALS['changes'] === ["member $activeId: unlocked", "member $inactiveId: unlocked",
+    "member $neverId: unlocked", "member $codeId: unlocked", "member $activeId: mail queued unlocked", "member $inactiveId: mail queued unlocked",
+    "member $neverId: mail queued invite",
+    "member $activeId: privileges +1", "member $inactiveId: privileges +1", "member $neverId: privileges +1", "member $codeId: privileges +1"]);
 check('unlock: all unlocked', $owner->query('SELECT bool_and(NOT locked) FROM member')->fetchColumn() === true);
 check('unlock: activated + active -> "unlocked" mail, invite_code unchanged', queued($owner, $activeId) === 'unlocked'
     && row($owner, 'SELECT invite_code FROM member WHERE id = ?', [$activeId])['invite_code'] === 'CODE1');
-check('unlock: activated, not active -> no mail', queued($owner, $inactiveId) === null);
+check('unlock: activated, not active -> "unlocked" mail', queued($owner, $inactiveId) === 'unlocked');
 check('unlock: never activated, no invite code -> invite', queued($owner, $neverId) === 'invite');
 check('unlock: never activated, with an invite code -> no mail', queued($owner, $codeId) === null);
 
@@ -260,6 +267,9 @@ $before = row($owner, 'SELECT * FROM member WHERE id = ?', [$id]);
 $result = sync($db, [entry(1, false, 38), entry(2)], null, false);
 check('lock, removals off: the would-counts and the additions', $result === counts(['created' => 1, 'locked' => 1,
     'privileges_granted' => 1, 'privileges_revoked' => 2]));
+$newId = id_of($owner, mv(2));
+check('lock, removals off: change lines, "would" for the removals', $GLOBALS['changes'] === ["member $newId: created",
+    "member $newId: mail queued invite", "member $newId: privileges +1", "member $id: would lock", "member $id: would revoke privileges -2"]);
 check('lock, removals off: not locked, sessions, privileges and the queued mail kept', row($owner, 'SELECT * FROM member WHERE id = ?', [$id]) === $before
     && count(privileges($owner, $id)) === 2 && (int) $owner->query("SELECT count(*) FROM session WHERE member_id = $id")->fetchColumn() === 2
     && queued($owner, $id) === 'unlocked');
@@ -267,6 +277,7 @@ check('lock, removals off: the new member created, invited, with unit 1', units(
     && queued($owner, id_of($owner, mv(2))) === 'invite');
 $result = sync($db, [entry(1, false, 38), entry(2)]);
 check('lock: counts', $result === counts(['locked' => 1, 'privileges_revoked' => 2]));
+check('lock: change lines', $GLOBALS['changes'] === ["member $id: locked", "member $id: mail queued locked", "member $id: privileges -2"]);
 $locked = row($owner, 'SELECT * FROM member WHERE id = ?', [$id]);
 check('lock: locked, sessions and privileges gone', $locked['locked'] === true && privileges($owner, $id) === []
     && (int) $owner->query("SELECT count(*) FROM session WHERE member_id = $id")->fetchColumn() === 0);
@@ -310,6 +321,9 @@ $nullId = member($owner, ['identification' => mv(6), 'notify_email' => 'old6@exa
 $owner->exec('INSERT INTO privilege (unit_id, member_id) SELECT 1, id FROM member');
 $result = sync($db, [entry(1), entry(2), entry(3), entry(4), entry(5, false), entry(6, true, null, [], null)]);
 check('email: counts', $result === counts(['email_updated' => 2, 'locked' => 1, 'privileges_revoked' => 1]));
+check('email: change lines', $GLOBALS['changes'] === ["member $inactiveId: email updated", "member $neverId: email updated",
+    "member $neverId: mail queued invite", "member $ineligibleId: locked", "member $ineligibleId: mail queued locked",
+    "member $ineligibleId: privileges -1"]);
 $inactive = row($owner, 'SELECT * FROM member WHERE id = ?', [$inactiveId]);
 check('email: inactive activated -> overwritten, pending email and secrets cleared', $inactive['notify_email'] === 'member1@example.org'
     && $inactive['notify_email_unconfirmed'] === null && $inactive['notify_email_secret'] === null
@@ -398,10 +412,16 @@ $stayId = active_member($owner, mv(8));
 $before = state($owner);
 check('leavers, removals off: the counts, nothing written', sync($db, [entry(8)], null, false)
     === counts(['deleted' => 2, 'anonymised' => 9, 'privileges_granted' => 1]));
+$leavers = [$plainId, $neverId, $coId, $trusteeId, $supporterId, $voterId, $authorOnlyId, $interestId, $commenterId, $suggesterId, $arguerId];
+sort($leavers);
+$lines = fn ($would) => array_merge(["member $stayId: privileges +1"], array_map(fn ($leaver) => "member $leaver: "
+    . (in_array($leaver, [$plainId, $neverId], true) ? ($would ? 'would delete' : 'deleted') : ($would ? 'would anonymise' : 'anonymised')), $leavers));
+check('leavers, removals off: change lines', $GLOBALS['changes'] === $lines(true));
 $owner->exec("DELETE FROM privilege WHERE member_id = $stayId");
 check('leavers, removals off: only the privilege granted', state($owner) === $before);
 $result = sync($db, [entry(8)]);
 check('leavers: counts', $result === counts(['deleted' => 2, 'anonymised' => 9, 'privileges_granted' => 1]));
+check('leavers: change lines', $GLOBALS['changes'] === $lines(false));
 check('leavers: unreferenced rows deleted', row($owner, 'SELECT count(*) AS n FROM member WHERE id IN (?, ?)', [$plainId, $neverId])['n'] === 0);
 $anonymised = $owner->query("SELECT id, identification, admin_comment, locked, active, invite_code, realname, statement, login, notify_email
     FROM member WHERE id IN ($coId, $trusteeId, $supporterId, $voterId, $authorOnlyId, $interestId, $commenterId, $suggesterId, $arguerId) ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);

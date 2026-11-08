@@ -196,7 +196,7 @@ foreach ($refusals as $name => [$status, $stdout, $stderr]) {
 }
 check('refused: messages', $refusals['wrong token'][2] === "member-sync: fetch failed: HTTP/1.0 403 Forbidden; nothing written\n"
     && $refusals['empty list (zero rows)'][2] === "member-sync: invalid document; nothing written\n"
-    && $refusals['unknown option'][2] === "member-sync: usage: member-sync.php [--dry-run] [--secrets=<file>]; nothing written\n"
+    && $refusals['unknown option'][2] === "member-sync: usage: member-sync.php [--dry-run] [--verbose] [--secrets=<file>]; nothing written\n"
     && $refusals['wrong database user'][2] === "member-sync: database: 08006; nothing written\n"
     && $refusals['token not hex'][2] === "member-sync: the token must be 64 lowercase hex digits; nothing written\n"
     && $refusals['token with a line break'][2] === "member-sync: the token must be 64 lowercase hex digits; nothing written\n"
@@ -234,7 +234,7 @@ $holder->beginTransaction();
 $holder->query("SELECT * FROM member WHERE id = $lockedId FOR UPDATE");
 $writer = connect($db, 'lqfb_membersync');
 try {
-    member_sync_apply($writer, $pseudonymised($members), false, true, '1s');
+    member_sync_apply($writer, $pseudonymised($members), false, true, false, '1s');
     $error = null;
 } catch (PDOException $e) {
     $error = member_sync_database_error($e);
@@ -244,7 +244,7 @@ unset($holder);
 check('lock timeout: 55P03 with its text, nothing written', $error === 'database: 55P03 (canceling statement due to lock timeout)'
     && state($owner) === $initial);
 check('lock timeout: for the transaction only (SET LOCAL), 60 s by default', $writer->query('SHOW lock_timeout')->fetchColumn() === '0'
-    && !$writer->inTransaction() && (new ReflectionFunction('member_sync_apply'))->getParameters()[4]->getDefaultValue() === '60s');
+    && !$writer->inTransaction() && (new ReflectionFunction('member_sync_apply'))->getParameters()[5]->getDefaultValue() === '60s');
 unset($writer);
 
 // The timeout (20 s; shorter here) applies to the fetch.
@@ -288,7 +288,7 @@ check('second run: no changes', $status === 0 && str_contains($stdout, ' 0 creat
 // The lock timeout is for the transaction only, also after a commit.
 $writer = connect($db, 'lqfb_membersync');
 ob_start();
-member_sync_apply($writer, $pseudonymised($members), false, true, '1s');
+member_sync_apply($writer, $pseudonymised($members), false, true, false, '1s');
 ob_end_clean();
 check('lock timeout: not left in the session after a commit', $writer->query('SHOW lock_timeout')->fetchColumn() === '0');
 unset($writer);
@@ -349,8 +349,20 @@ check('removals not set = off: exit 0, the would-counts', $status === 0 && $stde
     . "0 privileges granted, would revoke 0 privileges, 0 emails updated, 1 without email\n");
 check('removals off: the unlock done, the leaver kept', row($owner, "SELECT locked FROM member WHERE id = $lockedId")['locked'] === false
     && row($owner, "SELECT id FROM member WHERE id = $leaverId") !== false);
+// --verbose: one line per change before the summary, the Liquid member id only.
+$leaver2Id = active_member($owner, mv(98));
+$owner->exec("UPDATE member SET locked = TRUE WHERE id = $lockedId");
+[$status, $stdout, $stderr] = member_sync($members, ['removals' => 'off'], ['--dry-run', '--verbose']);
+check('verbose, removals off, dry run: the change lines, then the summary, nothing written', $status === 0 && $stderr === ''
+    && $stdout === "member $lockedId: unlocked\nmember $lockedId: mail queued unlocked\nmember $leaverId: would delete\nmember $leaver2Id: would delete\n"
+    . "dry run: 4 members: 0 created, 1 unlocked, would lock 0, would delete 2, would anonymise 0, "
+    . "0 privileges granted, would revoke 0 privileges, 0 emails updated, 1 without email\n");
+[$status, $stdout] = member_sync($members, [], ['--verbose', '--dry-run']);
+check('verbose, removals on, dry run: the change lines', $status === 0
+    && str_starts_with($stdout, "member $lockedId: unlocked\nmember $lockedId: mail queued unlocked\nmember $leaverId: deleted\nmember $leaver2Id: deleted\ndry run: "));
+check('verbose: the member id and the action only', preg_match_all('/^member [0-9]+: [a-z +-]*[0-9]*$/m', $stdout) === 4);
 [$status, $stdout] = member_sync($members);
-check('removals on: the leaver deleted', $status === 0 && str_contains($stdout, ' 1 deleted, ')
+check('removals on: the leavers deleted', $status === 0 && str_contains($stdout, ' 2 deleted, ')
     && row($owner, "SELECT id FROM member WHERE id = $leaverId") === false);
 
 check('no token, key, emails or ids in any output', !str_contains($outputs, TOKEN) && !str_contains($outputs, PSEUDONYM_KEY) && !str_contains($outputs, '@')

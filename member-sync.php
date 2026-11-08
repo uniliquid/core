@@ -1,8 +1,8 @@
 <?php
 
-// Member list from Admidio (CLI, PHP 8.5 with pdo_pgsql, run hourly by a
-// systemd timer as the user and database role lqfb_membersync):
-//   php member-sync.php [--dry-run] [--secrets=<file>]
+// Member list from Admidio (CLI, PHP 8.5 with pdo_pgsql, run every 10
+// minutes by a systemd timer as the user and database role lqfb_membersync):
+//   php member-sync.php [--dry-run] [--verbose] [--secrets=<file>]
 // Fetches the Admidio add-ons' member list for Liquid (JSON [{"id": int,
 // "lo": int|null, "eligible": bool, "email": string|null, "regions":
 // [string, ...]}, ...]), replaces each id by its pseudonym ("identification":
@@ -14,7 +14,9 @@
 // summary (counts only: the journal gets no personal data); exit status 0
 // on success, 1 (and a message on stderr) otherwise; nothing is written
 // then. --dry-run (run by hand) does the same, prints the summary prefixed
-// "dry run: " and rolls back.
+// "dry run: " and rolls back. --verbose (by hand) also prints, before the
+// summary, one line per change with the Liquid member id only ("member
+// <id>: created", ...).
 //
 // The secrets file (outside the document root; --secrets or the environment
 // variable MEMBER_SYNC_SECRETS) returns an array:
@@ -200,11 +202,12 @@ function member_sync_pseudonymise($members, $key)
 
 // Applies $members (JSON) with public.member_sync() in one transaction
 // (rolled back for a dry run; with $removals false the additions only, the
-// removals counted as "would ...") and prints the summary after it; throws (after
+// removals counted as "would ...") and prints the summary after it (with
+// $verbose, the change lines before it); throws (after
 // the rollback, printing nothing) on any database error. A row lock not
 // granted within $lockTimeout (e.g. held by a hung mail worker) is such an
 // error.
-function member_sync_apply($pdo, $members, $dryRun, $removals, $lockTimeout = '60s')
+function member_sync_apply($pdo, $members, $dryRun, $removals, $verbose, $lockTimeout = '60s')
 {
     $pdo->beginTransaction();
     try {
@@ -220,6 +223,9 @@ function member_sync_apply($pdo, $members, $dryRun, $removals, $lockTimeout = '6
     } catch (Throwable $e) {
         $pdo->rollBack();
         throw $e;
+    }
+    if ($verbose && $counts['changes'] !== '') {
+        echo $counts['changes'] . "\n";
     }
     if ($removals) {
         $removed = "{$counts['locked']} locked, {$counts['deleted']} deleted, {$counts['anonymised']} anonymised";
@@ -261,15 +267,18 @@ function member_sync_database_error($e)
 function member_sync_main($argv, $env)
 {
     $dryRun = false;
+    $verbose = false;
     $file = $env['MEMBER_SYNC_SECRETS'] ?? null;
     try {
         foreach (array_slice($argv, 1) as $arg) {
             if ($arg === '--dry-run') {
                 $dryRun = true;
+            } elseif ($arg === '--verbose') {
+                $verbose = true;
             } elseif (str_starts_with($arg, '--secrets=')) {
                 $file = substr($arg, strlen('--secrets='));
             } else {
-                throw new MemberSyncError('usage: member-sync.php [--dry-run] [--secrets=<file>]');
+                throw new MemberSyncError('usage: member-sync.php [--dry-run] [--verbose] [--secrets=<file>]');
             }
         }
         $secrets = member_sync_secrets($file);
@@ -293,7 +302,7 @@ function member_sync_main($argv, $env)
         }
         try {
             member_sync_apply($pdo, member_sync_pseudonymise($members, hex2bin($secrets['pseudonym_key'])), $dryRun,
-                ($secrets['removals'] ?? 'off') === 'on');
+                ($secrets['removals'] ?? 'off') === 'on', $verbose);
         } catch (PDOException $e) {
             throw new MemberSyncError(member_sync_database_error($e) . '; rolled back, nothing written');
         }

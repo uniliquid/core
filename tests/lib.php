@@ -106,7 +106,7 @@ function entry($id, $eligible = true, $lo = null, $regions = [], $email = 'defau
 
 // Runs public.member_sync($members, $removals) as lqfb_membersync in its own
 // transaction (after the statement $setup, if any); the counts, or the
-// SQLSTATE of the error. $members is encoded as JSON unless it is a string,
+// SQLSTATE of the error (the change lines in $GLOBALS['changes']). $members is encoded as JSON unless it is a string,
 // with each "id" replaced by "identification" => mv(id) as member-sync.php
 // does (unless the entry has an identification).
 function sync($db, $members, $setup = null, $removals = true)
@@ -127,7 +127,10 @@ function sync($db, $members, $setup = null, $removals = true)
     try {
         $statement = $pdo->prepare('SELECT * FROM public.member_sync(?, ?)');
         $statement->execute([is_string($members) ? $members : json_encode($members), $removals ? 't' : 'f']);
-        return array_map('intval', $statement->fetch(PDO::FETCH_ASSOC));
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+        $GLOBALS['changes'] = $row['changes'] === '' ? [] : explode("\n", $row['changes']);
+        unset($row['changes']);
+        return array_map('intval', $row);
     } catch (PDOException $e) {
         return $e->getCode();
     }
