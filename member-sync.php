@@ -311,9 +311,9 @@ function member_sync_main($argv, $env)
         fwrite(STDERR, 'member-sync: ' . $message . (str_ends_with($message, 'nothing written') ? '' : '; nothing written') . "\n");
         return 1;
     } catch (Throwable $e) {
-        // Anything else (a bug, a bad secrets value): no details, which
-        // could hold data.
-        fwrite(STDERR, "member-sync: unexpected error; nothing written\n");
+        // Anything else (a bug, a bad secrets value): the class name only;
+        // the message could hold data.
+        fwrite(STDERR, 'member-sync: unexpected error (' . get_class($e) . "); nothing written\n");
         return 1;
     }
     return 0;
