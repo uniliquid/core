@@ -104,12 +104,12 @@ function entry($id, $eligible = true, $lo = null, $regions = [], $email = 'defau
         'email' => $email === 'default' ? "member$id@example.org" : $email, 'regions' => $regions];
 }
 
-// Runs public.member_sync($members, $removals) as lqfb_membersync in its own
+// Runs public.member_sync($members) as lqfb_membersync in its own
 // transaction (after the statement $setup, if any); the counts, or the
 // SQLSTATE of the error (the change lines in $GLOBALS['changes']). $members is encoded as JSON unless it is a string,
 // with each "id" replaced by "identification" => mv(id) as member-sync.php
 // does (unless the entry has an identification).
-function sync($db, $members, $setup = null, $removals = true)
+function sync($db, $members, $setup = null)
 {
     if (!is_string($members)) {
         $members = array_map(function ($entry) {
@@ -125,8 +125,8 @@ function sync($db, $members, $setup = null, $removals = true)
         $pdo->exec($setup);
     }
     try {
-        $statement = $pdo->prepare('SELECT * FROM public.member_sync(?, ?)');
-        $statement->execute([is_string($members) ? $members : json_encode($members), $removals === null ? null : ($removals ? 't' : 'f')]);
+        $statement = $pdo->prepare('SELECT * FROM public.member_sync(?)');
+        $statement->execute([is_string($members) ? $members : json_encode($members)]);
         $row = $statement->fetch(PDO::FETCH_ASSOC);
         $GLOBALS['changes'] = $row['changes'] === '' ? [] : explode("\n", $row['changes']);
         unset($row['changes']);
@@ -139,7 +139,7 @@ function sync($db, $members, $setup = null, $removals = true)
 // The counts with $changes set and the others 0.
 function counts($changes = [])
 {
-    return array_merge(['created' => 0, 'unlocked' => 0, 'locked' => 0, 'deleted' => 0, 'anonymised' => 0,
+    return array_merge(['created' => 0, 'unlocked' => 0, 'locked' => 0,
         'privileges_granted' => 0, 'privileges_revoked' => 0, 'email_updated' => 0, 'no_email' => 0], $changes);
 }
 

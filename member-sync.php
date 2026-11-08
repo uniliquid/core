@@ -23,12 +23,9 @@
 // ['url' => 'https://<Admidio internal address>:<port>/liquid-members.php',
 //  'token' => '<hex>', 'cafile' => '<Admidio certificate>',
 //  'pseudonym_key' => '<hex, at least 32 random bytes>',
-//  'dsn' => 'pgsql:dbname=<database>', 'user' => 'lqfb_membersync',
-//  'removals' => 'off' or 'on'].
-// No password: peer authentication. Removals (locking, revoking privileges,
-// deleting or anonymising departed members) only with 'removals' => 'on';
-// 'off' or missing: the additions only, and the summary says what the
-// removals would have been ("would lock <n>", ...).
+//  'dsn' => 'pgsql:dbname=<database>', 'user' => 'lqfb_membersync'].
+// No password: peer authentication. Nothing the sync does deletes members
+// or privileges: departed members are locked, rights cleared.
 
 const MEMBER_SYNC_MAX_BODY = 1048576;
 const MEMBER_SYNC_TIMEOUT = 20;
@@ -42,8 +39,7 @@ class MemberSyncError extends Exception
 // The secrets from $file; throws unless the URL is https without control
 // characters or spaces, the token is 64 lowercase hex digits (as the
 // add-ons' tokens), the cafile exists, the pseudonym key is at least 64
-// lowercase hex digits (32 bytes), whole bytes, and removals (if set) is
-// 'off' or 'on'.
+// lowercase hex digits (32 bytes), whole bytes.
 function member_sync_secrets($file)
 {
     if (!is_string($file) || $file === '' || !is_file($file)) {
@@ -71,9 +67,6 @@ function member_sync_secrets($file)
     }
     if (!is_string($secrets['pseudonym_key'] ?? null) || !preg_match('/^(?:[0-9a-f]{2}){32,}$/D', $secrets['pseudonym_key'])) {
         throw new MemberSyncError('the pseudonym key must be at least 64 lowercase hex digits (an even number)');
-    }
-    if (!in_array($secrets['removals'] ?? 'off', ['off', 'on'], true)) {
-        throw new MemberSyncError("removals must be 'off' or 'on'");
     }
     return $secrets;
 }
@@ -201,19 +194,18 @@ function member_sync_pseudonymise($members, $key)
 }
 
 // Applies $members (JSON) with public.member_sync() in one transaction
-// (rolled back for a dry run; with $removals false the additions only, the
-// removals counted as "would ...") and prints the summary after it (with
-// $verbose, the change lines before it); throws (after
-// the rollback, printing nothing) on any database error. A row lock not
+// (rolled back for a dry run) and prints the summary after it (with
+// $verbose, the change lines before it); throws (after the rollback,
+// printing nothing) on any database error. A row lock not
 // granted within $lockTimeout (e.g. held by a hung mail worker) is such an
 // error.
-function member_sync_apply($pdo, $members, $dryRun, $removals, $verbose, $lockTimeout = '60s')
+function member_sync_apply($pdo, $members, $dryRun, $verbose, $lockTimeout = '60s')
 {
     $pdo->beginTransaction();
     try {
         $pdo->exec("SET LOCAL lock_timeout = '$lockTimeout'");
-        $statement = $pdo->prepare('SELECT * FROM public.member_sync(?, ?)');
-        $statement->execute([$members, $removals ? 't' : 'f']);
+        $statement = $pdo->prepare('SELECT * FROM public.member_sync(?)');
+        $statement->execute([$members]);
         $counts = $statement->fetch(PDO::FETCH_ASSOC);
         if ($dryRun) {
             $pdo->rollBack();
@@ -227,16 +219,9 @@ function member_sync_apply($pdo, $members, $dryRun, $removals, $verbose, $lockTi
     if ($verbose && $counts['changes'] !== '') {
         echo $counts['changes'] . "\n";
     }
-    if ($removals) {
-        $removed = "{$counts['locked']} locked, {$counts['deleted']} deleted, {$counts['anonymised']} anonymised";
-        $revoked = "{$counts['privileges_revoked']} privileges revoked";
-    } else {
-        $removed = "would lock {$counts['locked']}, would delete {$counts['deleted']}, would anonymise {$counts['anonymised']}";
-        $revoked = "would revoke {$counts['privileges_revoked']} privileges";
-    }
     echo ($dryRun ? 'dry run: ' : '') . count(json_decode($members)) . ' members: '
-        . "{$counts['created']} created, {$counts['unlocked']} unlocked, $removed, "
-        . "{$counts['privileges_granted']} privileges granted, $revoked, "
+        . "{$counts['created']} created, {$counts['unlocked']} unlocked, {$counts['locked']} locked, "
+        . "{$counts['privileges_granted']} privileges granted, {$counts['privileges_revoked']} privileges revoked, "
         . "{$counts['email_updated']} emails updated, {$counts['no_email']} without email\n";
 }
 
@@ -301,8 +286,7 @@ function member_sync_main($argv, $env)
             throw new MemberSyncError('invalid document');
         }
         try {
-            member_sync_apply($pdo, member_sync_pseudonymise($members, hex2bin($secrets['pseudonym_key'])), $dryRun,
-                ($secrets['removals'] ?? 'off') === 'on', $verbose);
+            member_sync_apply($pdo, member_sync_pseudonymise($members, hex2bin($secrets['pseudonym_key'])), $dryRun, $verbose);
         } catch (PDOException $e) {
             throw new MemberSyncError(member_sync_database_error($e) . '; rolled back, nothing written');
         }
