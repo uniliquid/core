@@ -274,8 +274,8 @@ function member_sync_migrate_main($argv, $env)
         fwrite(STDERR, 'member-sync-migrate: ' . $e->getMessage() . "; nothing written\n");
         return 1;
     } catch (Throwable $e) {
-        // Anything else: no details, which could hold data.
-        fwrite(STDERR, "member-sync-migrate: unexpected error; nothing written\n");
+        // Anything else: the class name only; the message could hold data.
+        fwrite(STDERR, 'member-sync-migrate: unexpected error (' . get_class($e) . "); nothing written\n");
         return 1;
     }
     return 0;

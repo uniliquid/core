@@ -128,6 +128,6 @@ file_put_contents("$tmp/secrets.php", '<?php return ' . var_export(['dsn' => ['x
 [$status, $stdout, $stderr] = run([PHP_BINARY, __DIR__ . '/../member-sync-migrate.php', '--expect=2',
     "--legacy-key-file=$tmp/legacy", "--secrets=$tmp/secrets.php"], ['PGUSER' => 'lqfb']);
 check('command line: an uncaught error (exit 1, generic message)', $status === 1 && $stdout === ''
-    && $stderr === "member-sync-migrate: unexpected error; nothing written\n");
+    && $stderr === "member-sync-migrate: unexpected error (TypeError); nothing written\n");
 
 done();

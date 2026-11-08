@@ -59,7 +59,6 @@ $secrets = [
     'pseudonym_key' => PSEUDONYM_KEY,
     'dsn' => 'pgsql:host=' . SOCKET . ";dbname=$db",
     'user' => 'lqfb_membersync',
-    'removals' => 'on',
 ];
 
 // A secrets file with $config (an array or PHP source); returns its path.
@@ -173,7 +172,6 @@ $refusals = [
     'pseudonym key too short' => member_sync($members, ['pseudonym_key' => substr(PSEUDONYM_KEY, 2)]),
     'pseudonym key odd length' => member_sync($members, ['pseudonym_key' => PSEUDONYM_KEY . '0']),
     'pseudonym key upper case' => member_sync($members, ['pseudonym_key' => strtoupper(PSEUDONYM_KEY)]),
-    'removals neither off nor on' => member_sync($members, ['removals' => true]),
     'dsn not a string (an uncaught error)' => member_sync($members, ['dsn' => ['x']]),
     'wrong database user' => member_sync($members, ['user' => 'nobody']),
     'wrong token' => member_sync($members, ['token' => strrev(TOKEN)]),
@@ -203,8 +201,7 @@ check('refused: messages', $refusals['wrong token'][2] === "member-sync: fetch f
     && $refusals['token with a line break'][2] === "member-sync: the token must be 64 lowercase hex digits; nothing written\n"
     && $refusals['URL with a space'][2] === "member-sync: the URL has control characters or spaces; nothing written\n"
     && $refusals['pseudonym key too short'][2] === "member-sync: the pseudonym key must be at least 64 lowercase hex digits (an even number); nothing written\n"
-    && $refusals['removals neither off nor on'][2] === "member-sync: removals must be 'off' or 'on'; nothing written\n"
-    && $refusals['dsn not a string (an uncaught error)'][2] === "member-sync: unexpected error; nothing written\n");
+    && $refusals['dsn not a string (an uncaught error)'][2] === "member-sync: unexpected error (TypeError); nothing written\n");
 // Only member_sync()'s own texts (and the lock timeout's) are shown.
 $other = new PDOException('other');
 $other->errorInfo = ['22023', 7, "ERROR:  invalid value \"member1@example.org\"\nDETAIL: x"];
@@ -236,7 +233,7 @@ $holder->beginTransaction();
 $holder->query("SELECT * FROM member WHERE id = $lockedId FOR UPDATE");
 $writer = connect($db, 'lqfb_membersync');
 try {
-    member_sync_apply($writer, $pseudonymised($members), false, true, false, '1s');
+    member_sync_apply($writer, $pseudonymised($members), false, false, '1s');
     $error = null;
 } catch (PDOException $e) {
     $error = member_sync_database_error($e);
@@ -246,7 +243,7 @@ unset($holder);
 check('lock timeout: 55P03 with its text, nothing written', $error === 'database: 55P03 (canceling statement due to lock timeout)'
     && state($owner) === $initial);
 check('lock timeout: for the transaction only (SET LOCAL), 60 s by default', $writer->query('SHOW lock_timeout')->fetchColumn() === '0'
-    && !$writer->inTransaction() && (new ReflectionFunction('member_sync_apply'))->getParameters()[5]->getDefaultValue() === '60s');
+    && !$writer->inTransaction() && (new ReflectionFunction('member_sync_apply'))->getParameters()[4]->getDefaultValue() === '60s');
 unset($writer);
 
 // The timeout (20 s; shorter here) applies to the fetch.
@@ -275,22 +272,22 @@ sleep(7);
 
 [$status, $stdout, $stderr] = member_sync($members, [], ['--dry-run']);
 check('dry run: exit 0, nothing written', $status === 0 && $stderr === '' && state($owner) === $initial);
-check('dry run: the counts only, prefixed', $stdout === "dry run: 4 members: 1 created, 1 unlocked, 0 locked, 1 deleted, 0 anonymised, "
+check('dry run: the counts only, prefixed', $stdout === "dry run: 4 members: 1 created, 1 unlocked, 1 locked, "
     . "4 privileges granted, 0 privileges revoked, 0 emails updated, 1 without email\n");
 
 [$status, $stdout, $stderr] = member_sync($members);
-check('run: exit 0, summary line only', $status === 0 && $stderr === '' && $stdout === "4 members: 1 created, 1 unlocked, 0 locked, "
-    . "1 deleted, 0 anonymised, 4 privileges granted, 0 privileges revoked, 0 emails updated, 1 without email\n");
+check('run: exit 0, summary line only', $status === 0 && $stderr === '' && $stdout === "4 members: 1 created, 1 unlocked, 1 locked, "
+    . "4 privileges granted, 0 privileges revoked, 0 emails updated, 1 without email\n");
 check('run: written', id_of($owner, mv(1)) !== null && row($owner, "SELECT locked FROM member WHERE id = $lockedId")['locked'] === false
-    && row($owner, "SELECT id FROM member WHERE id = $leaverId") === false);
+    && row($owner, "SELECT locked FROM member WHERE id = $leaverId")['locked'] === true);
 $synced = state($owner);
 [$status, $stdout] = member_sync($members);
-check('second run: no changes', $status === 0 && str_contains($stdout, ' 0 created, 0 unlocked, 0 locked, 0 deleted, 0 anonymised, 0 privileges granted, 0 privileges revoked, 0 emails updated') && state($owner) === $synced);
+check('second run: no changes', $status === 0 && str_contains($stdout, ' 0 created, 0 unlocked, 0 locked, 0 privileges granted, 0 privileges revoked, 0 emails updated') && state($owner) === $synced);
 
 // The lock timeout is for the transaction only, also after a commit.
 $writer = connect($db, 'lqfb_membersync');
 ob_start();
-member_sync_apply($writer, $pseudonymised($members), false, true, false, '1s');
+member_sync_apply($writer, $pseudonymised($members), false, false, '1s');
 ob_end_clean();
 check('lock timeout: not left in the session after a commit', $writer->query('SHOW lock_timeout')->fetchColumn() === '0');
 unset($writer);
@@ -326,46 +323,28 @@ check('concurrent runs: the first one completes', $first[0] === 0 && row($owner,
 
 // SQL error: rolled back (the function revoked for the test).
 $admin = connect($db, 'postgres');
-$admin->exec('REVOKE EXECUTE ON FUNCTION public.member_sync(jsonb, boolean) FROM lqfb_membersync');
+$admin->exec('REVOKE EXECUTE ON FUNCTION public.member_sync(jsonb) FROM lqfb_membersync');
 $owner->exec("UPDATE member SET locked = TRUE WHERE id = $lockedId");
 $before = state($owner);
 [$status, $stdout, $stderr] = member_sync($members);
 check('SQL error: exit 1, rolled back, SQLSTATE only', $status === 1 && $stdout === ''
     && $stderr === "member-sync: database: 42501; rolled back, nothing written\n" && state($owner) === $before);
-$admin->exec('GRANT EXECUTE ON FUNCTION public.member_sync(jsonb, boolean) TO lqfb_membersync');
+$admin->exec('GRANT EXECUTE ON FUNCTION public.member_sync(jsonb) TO lqfb_membersync');
 unset($admin);
 
-// --- Removals off ('off', or no setting): the additions only --------------------
-
-$leaverId = active_member($owner, mv(99));
-$before = state($owner);
-[$status, $stdout, $stderr] = member_sync($members, ['removals' => 'off'], ['--dry-run']);
-check('removals off, dry run: exit 0, nothing written, the would-counts', $status === 0 && $stderr === '' && state($owner) === $before
-    && $stdout === "dry run: 4 members: 0 created, 1 unlocked, would lock 0, would delete 1, would anonymise 0, "
-    . "0 privileges granted, would revoke 0 privileges, 0 emails updated, 1 without email\n");
-$noSetting = $secrets;
-unset($noSetting['removals']);
-[$status, $stdout, $stderr] = member_sync($members, [], ['--secrets=' . secrets_file($noSetting)]);
-check('removals not set = off: exit 0, the would-counts', $status === 0 && $stderr === ''
-    && $stdout === "4 members: 0 created, 1 unlocked, would lock 0, would delete 1, would anonymise 0, "
-    . "0 privileges granted, would revoke 0 privileges, 0 emails updated, 1 without email\n");
-check('removals off: the unlock done, the leaver kept', row($owner, "SELECT locked FROM member WHERE id = $lockedId")['locked'] === false
-    && row($owner, "SELECT id FROM member WHERE id = $leaverId") !== false);
 // --verbose: one line per change before the summary, the Liquid member id only.
 $leaver2Id = active_member($owner, mv(98));
 $owner->exec("UPDATE member SET locked = TRUE WHERE id = $lockedId");
-[$status, $stdout, $stderr] = member_sync($members, ['removals' => 'off'], ['--dry-run', '--verbose']);
-check('verbose, removals off, dry run: the change lines, then the summary, nothing written', $status === 0 && $stderr === ''
-    && $stdout === "member $lockedId: unlocked\nmember $lockedId: mail queued unlocked\nmember $leaverId: would delete\nmember $leaver2Id: would delete\n"
-    . "dry run: 4 members: 0 created, 1 unlocked, would lock 0, would delete 2, would anonymise 0, "
-    . "0 privileges granted, would revoke 0 privileges, 0 emails updated, 1 without email\n");
-[$status, $stdout] = member_sync($members, [], ['--verbose', '--dry-run']);
-check('verbose, removals on, dry run: the change lines', $status === 0
-    && str_starts_with($stdout, "member $lockedId: unlocked\nmember $lockedId: mail queued unlocked\nmember $leaverId: deleted\nmember $leaver2Id: deleted\ndry run: "));
+$before = state($owner);
+[$status, $stdout, $stderr] = member_sync($members, [], ['--dry-run', '--verbose']);
+check('verbose, dry run: the change lines, then the summary, nothing written', $status === 0 && $stderr === '' && state($owner) === $before
+    && $stdout === "member $lockedId: unlocked\nmember $lockedId: mail queued unlocked\nmember $leaver2Id: locked\nmember $leaver2Id: mail queued locked\n"
+    . "dry run: 4 members: 0 created, 1 unlocked, 1 locked, 0 privileges granted, 0 privileges revoked, 0 emails updated, 1 without email\n");
 check('verbose: the member id and the action only', preg_match_all('/^member [0-9]+: [a-z +-]*[0-9]*$/m', $stdout) === 4);
-[$status, $stdout] = member_sync($members);
-check('removals on: the leavers deleted', $status === 0 && str_contains($stdout, ' 2 deleted, ')
-    && row($owner, "SELECT id FROM member WHERE id = $leaverId") === false);
+// No removals switch: an old 'removals' => 'off' in the secrets file is ignored.
+[$status, $stdout] = member_sync($members, ['removals' => 'off']);
+check('departed member locked, not deleted (an old removals setting ignored)', $status === 0 && str_contains($stdout, ' 1 locked, ')
+    && row($owner, "SELECT locked FROM member WHERE id = $leaver2Id")['locked'] === true);
 
 check('no token, key, emails or ids in any output', !str_contains($outputs, TOKEN) && !str_contains($outputs, PSEUDONYM_KEY) && !str_contains($outputs, '@')
     && !preg_match('/mv:|\bid\b/', $outputs));
