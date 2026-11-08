@@ -261,6 +261,18 @@ check('unlock: expired password reset cleared', $reset($activeId) === [null, nul
 check('unlock: password reset without expiry cleared', $reset($neverId) === [null, null]);
 check('unlock: unexpired password reset kept', $reset($inactiveId) === ['RESET2', '2100-01-01 00:00:00+00']);
 
+// Expired password resets: cleared on every run for owned rows.
+$db = synced_database();
+$owner = connect($db);
+$expiredId = active_member($owner, mv(1), ['password_reset_secret' => 'RESET1', 'password_reset_secret_expiry' => '2000-01-01']);
+$validId = active_member($owner, mv(2), ['password_reset_secret' => 'RESET2', 'password_reset_secret_expiry' => '2100-01-01']);
+$otherId = active_member($owner, 'other', ['password_reset_secret' => 'RESET3', 'password_reset_secret_expiry' => '2000-01-01']);
+sync($db, [entry(1), entry(2)], null, false);
+$reset = fn ($id) => array_values(row($owner, 'SELECT password_reset_secret, password_reset_secret_expiry FROM member WHERE id = ?', [$id]));
+check('reset: expired cleared (not locked, removals off)', $reset($expiredId) === [null, null]);
+check('reset: unexpired kept', $reset($validId) === ['RESET2', '2100-01-01 00:00:00+00']);
+check('reset: not owned untouched', $reset($otherId) === ['RESET3', '2000-01-01 00:00:00+00']);
+
 // Lock.
 $db = synced_database();
 $owner = connect($db);
@@ -303,6 +315,12 @@ $owner->exec("INSERT INTO session (ident, member_id) VALUES ('s1', $id)");
 check('reconcile: already locked, leftovers removed (no lock counted)', sync($db, [entry(1, false)]) === counts(['privileges_revoked' => 1]));
 check('reconcile: sessions and privileges gone, no mail', privileges($owner, $id) === [] && queued($owner, $id) === null
     && (int) $owner->query('SELECT count(*) FROM session')->fetchColumn() === 0);
+check('reconcile: already locked and active -> deactivated', row($owner, 'SELECT active FROM member WHERE id = ?', [$id])['active'] === false);
+$db = synced_database();
+$owner = connect($db);
+$id = active_member($owner, mv(1), ['locked' => true]);
+sync($db, [entry(1, false)], null, false);
+check('reconcile, removals off: locked row stays active', row($owner, 'SELECT active FROM member WHERE id = ?', [$id])['active'] === true);
 
 // Mass lock of a well-formed list goes through (no threshold).
 $db = synced_database();
