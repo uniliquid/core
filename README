@@ -106,8 +106,9 @@ never touched):
   manager or polling right is kept with these two flags cleared);
 - listed and not eligible: locked and deactivated (LiquidFeedback counts
   members with "active" and the voting right, not "locked"; a login after
-  an unlock activates again), sessions deleted, rights in the managed
-  units removed; the "locked" mail when it was unlocked;
+  an unlock activates again; until then the "not active" step above
+  applies), sessions deleted, rights in the managed units removed; the
+  "locked" mail when it was unlocked;
 - not listed: deleted if nothing references it (initiators, delegations to
   it, interest, support, opinions, votes, suggestions, arguments, issue
   comments; or a reference that refuses the DELETE), otherwise anonymised
@@ -124,8 +125,8 @@ setting (default off); take a database dump right before switching it on.
 Plain LiquidFeedback behaviour that follows: a voting right revoked (or a
 member locked) while an issue is in voting drops that member's vote when
 the voting closes (also after an unlock before the close, unless the
-member has logged in again since); delegations to locked or anonymised members lapse, as
-before the sync.
+member has logged in again since); delegations to locked or anonymised
+members lapse, as before the sync.
 
 Database setup (once, as a superuser): the role that runs the sync,
   CREATE ROLE lqfb_membersync LOGIN;

@@ -367,10 +367,10 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
       -- the block at the end (the variables keep the counts), so nothing is
       -- locked, revoked, deleted or anonymised and no "locked" mail queued.
       BEGIN
-        -- Listed and not eligible, or a departed admin: locked and
-        -- deactivated (LQFB counts "active" members, not unlocked ones; a
-        -- login activates again), reconciled on every run; the "locked" mail
-        -- on the transition only.
+        -- Listed and not eligible, or a departed admin: locked and, on the
+        -- transition, deactivated (LQFB counts "active" members, not
+        -- unlocked ones; a login activates again) with the "locked" mail;
+        -- sessions and rights below are reconciled on every run.
         WITH "locked" AS (
           UPDATE public.member SET "locked" = TRUE, "active" = FALSE
           WHERE public.member_sync_owned("identification")
