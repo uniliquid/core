@@ -1,0 +1,11 @@
+Hallo,
+
+dein Zugang zum Liquid-System der Piratenpartei wurde wieder freigeschaltet.
+
+Anmelden kannst du dich hier: #{base_url}
+Falls du dein Passwort nicht mehr weißt, kannst du hier ein neues anfordern: #{base_url}index/reset_password.html
+
+Solltest du Fragen haben, kannst du einfach auf diese Mail antworten.
+
+Mit besten Grüßen,
+ die AG Liquid der Piratenpartei Österreichs

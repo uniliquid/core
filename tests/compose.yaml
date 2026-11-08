@@ -1,0 +1,36 @@
+# Test environment: PostgreSQL 17 with the LiquidFeedback schema (core.sql),
+# the roles of the member sync and test units (init.sh), and PHP 8.5 with
+# pdo_pgsql and psql for the tests (run.sh runs each tests/*-test.php in its
+# own container). PHP connects through the PostgreSQL socket (shared volume);
+# the test HTTPS server runs in the PHP container on 127.0.0.1; no network
+# access is needed.
+services:
+  db:
+    image: postgres:17@sha256:3b0cda93be7c8dba2ed484d19393d93845dc3dafb88973e248ba8e6d99d784e1
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - socket:/var/run/postgresql
+      - ./init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+      - ..:/src:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    network_mode: none
+    healthcheck:
+      # TCP on the loopback: only the final server listens there, not the
+      # one the entrypoint runs init.sh with.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+      interval: 2s
+      retries: 60
+  php:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - socket:/var/run/postgresql
+      - ..:/src:ro
+    working_dir: /src
+    network_mode: none
+volumes:
+  socket:

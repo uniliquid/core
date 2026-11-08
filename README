@@ -52,3 +52,191 @@ $ psql -v ON_ERROR_STOP=1 -f tmp.sql DATABASE_NAME
 $ exit         # leave "su" command
 $ rm tmp.sql
 
+
+
+Member sync (Admidio -> LiquidFeedback)
+=======================================
+
+member-sync.php fetches the member list for Liquid from the Admidio
+add-ons (PPOE/admidio-addons, liquid-members.php) and applies it with the
+database function public.member_sync() of member_sync.sql. It replaces
+getaccounts.php and lf_update_accounts. The invitation, "locked" and
+"unlocked" mails are queued in the table member_sync_mail and sent by
+lf_member_sync_mail (member_sync_mail.lua, texts member_sync_locked.txt and
+member_sync_unlocked.txt) through the frontend, as sendinvitation.sh did.
+
+Data contract. HTTPS GET with "Authorization: Bearer <token>"; 200 and a
+JSON list, one object per Admidio member with exactly these keys:
+  {"id": <Admidio user id, integer >= 1, unique>,
+   "lo": <Admidio LO role id of lo_map, or null>,
+   "eligible": <true or false>,
+   "email": <address or null>,
+   "regions": [<distinct NUTS-3 codes of region_map>, ...]}
+member-sync.php replaces each id by its pseudonym, 'mv:' and the
+lowercase hex HMAC-SHA256 of the decimal id with the pseudonym key (see
+"Secrets file"), so the Liquid database never holds Admidio user ids.
+An empty list, or any entry that does not fit, rejects the whole list
+(nothing is written), as does a list that matches none of the existing
+'mv:' rows (e.g. pseudonyms made with another key). "email" must be null
+or at most 254 characters of the form local@domain: the local part dot-separated atoms of letters,
+digits and !#$%&'*+/=?^_`{|}~- ; the domain at least two dot-separated
+labels of letters, digits and inner hyphens. The producer sends null for
+any other address.
+The maps couple both sides: every LO role id and region code the producer
+can send must be in lo_map and region_map. A new LO or region on the
+Admidio side (its liquid_region_plz table) without the matching map entry
+here rejects the whole list, so every run fails until the maps are
+updated and member_sync.sql is applied again.
+
+What the sync does, only to rows with identification 'mv:' and 64
+lowercase hex digits (all other rows, e.g. test, service or old rows, are
+never touched):
+- eligible, no row, with email: new account and an invitation;
+- eligible and locked: unlocked; the "unlocked" mail if activated
+  (active or not), the invitation again if never activated and without an
+  invite code;
+- eligible, not active, another email: notify_email set, pending email
+  confirmation and password reset cleared; if never activated, the old
+  invite code revoked and the invitation sent again;
+- eligible: voting_right and initiative_right in unit 1, the LO unit and
+  the region units; removed in the other managed units (a row with a
+  manager or polling right is kept with these two flags cleared);
+- listed and not eligible: locked, sessions deleted, rights in the managed
+  units removed; the "locked" mail when it was unlocked;
+- not listed: deleted if nothing references it (initiators, delegations to
+  it, interest, support, opinions, votes, suggestions, arguments, issue
+  comments; or a reference that refuses the DELETE), otherwise anonymised
+  (delete_member(), all privileges removed, identification and invite code
+  cleared, admin_comment 'Austritt', locked); an admin is only locked as
+  above, never deleted or anonymised. The sync never writes the admin flag.
+Everything in one transaction; a second identical run changes nothing.
+Removals (locking with its sessions and "locked" mail, removing rights,
+deleting and anonymising) only with 'removals' => 'on' in the secrets
+file; with 'off' (the default) a run does the additions only (new
+accounts, unlocks, emails, rights, invitation and "unlocked" mails) and
+reports the removals it would have done.
+
+Database setup (once, as a superuser): the role that runs the sync,
+  CREATE ROLE lqfb_membersync LOGIN;
+Then, on every deployment, as the owner of the LiquidFeedback tables
+(here lqfb), which must own schema public (no other role, nor PUBLIC, may
+have CREATE on it):
+$ psql -X -v ON_ERROR_STOP=1 -v lo_map='<json>' -v region_map='<json>' \
+    -v managed_units='<json>' -f member_sync.sql liquid_feedback
+with, for example,
+  lo_map='{"37": 2, "38": 6, "39": 4, "40": 10, "41": 5, "42": 7, "43": 3, "44": 8, "45": 9}'
+  region_map='{"AT130": 2, "AT221": 11}'
+  managed_units='[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]'
+The maps are baked into public.member_sync_units(); managed_units must
+contain unit 1 and every unit of the maps, all existing. lqfb_membersync
+may only execute public.member_sync(). The mail queue holds member id,
+kind and time of each unsent mail; a row is deleted once its mail is
+sent, so an lf_export dump contains only the unsent ones.
+
+Secrets file (outside any document root; root:lqfb_membersync 0640),
+passed with --secrets=<file> or the environment variable
+MEMBER_SYNC_SECRETS:
+  <?php return [
+      'url' => 'https://<Admidio internal address>:<port>/liquid-members.php',
+      'token' => '<the token of the Admidio side, 64 lowercase hex digits>',
+      'cafile' => '<the Admidio certificate, PEM>',
+      'pseudonym_key' => '<at least 32 random bytes, lowercase hex>',
+      'dsn' => 'pgsql:dbname=liquid_feedback',
+      'user' => 'lqfb_membersync',
+      'removals' => 'off',  // or 'on'; missing: 'off' (see above)
+  ];
+No password: peer authentication, so the OS user running the sync is also
+named lqfb_membersync. Make the pseudonym key once with
+  openssl rand -hex 32
+and keep it (backup with the secrets): every 'mv:' row depends on it; the
+sync refuses to run without a valid one. With the key, an Admidio id can
+be linked to its Liquid row; without it, not. A new key needs a rewrite
+of the rows: with both timers stopped, set each listed member's
+identification from the old to the new pseudonym in one transaction, then
+replace the key (a run with the new key alone is refused, see above).
+
+Running (PHP 8.5 CLI from packages.sury.org, with pdo_pgsql, as
+lqfb_membersync, by a systemd timer every 10 minutes, Type=oneshot):
+$ php member-sync.php [--dry-run] [--verbose] [--secrets=<file>]
+It takes a session advisory lock before the fetch (a second run fails at
+once), fetches (TLS verified against the cafile only, no redirects, 20 s,
+at most 1 MiB, HTTP 200 only) and applies. stdout: one summary line with
+counts only ("<n> members: <n> created, <n> unlocked, ..."; with
+removals off "would lock <n>, would delete <n>, would anonymise <n>",
+"would revoke <n> privileges" in place of the removal counts), prefixed
+"dry run: " for --dry-run, which rolls back (with either setting). On any error: a message on
+stderr ("member-sync: <reason>; nothing written", for database errors only
+the SQLSTATE; for a rejected list (22023) or a lock (55P03) also the
+reason, e.g. "(member_sync: entry 3: lo not null and not in the map)",
+with the entry's position and the field, no data) and exit status 1;
+nothing is written, the last state stays. A row lock not granted within
+60 s (e.g. held by a hung mail worker) is such an error.
+--verbose (for runs by hand, also with --dry-run) prints, before the
+summary, one line per change with the Liquid member id only, never
+names, addresses, pseudonyms or Admidio ids: "member <id>: created",
+"unlocked", "email updated", "locked", "deleted", "anonymised",
+"privileges +<n>", "privileges -<n>", "mail queued invite|unlocked|locked";
+with removals off "would lock", "would delete", "would anonymise", "would
+revoke privileges -<n>". Without it the output is the summary line only.
+Mail worker (started right after each sync run, also after a failed one,
+so mails go out while the sync fails; as the
+owner of the tables, e.g. lqfb, with the frontend in
+/opt/liquid_feedback_frontend and WebMCP in /opt/webmcp; <config> is the
+frontend's WebMCP config name, its config/<config>.lua):
+$ /opt/liquid_feedback_core/lf_member_sync_mail <config>
+which runs, in /opt/liquid_feedback_frontend,
+  echo "dofile(os.getenv('LF_CORE_DIR') .. '/member_sync_mail.lua')" | \
+    /opt/webmcp/bin/webmcp_shell <config>
+with LF_CORE_DIR the directory of lf_member_sync_mail. One pass: each
+queue row in its own transaction, with the member and queue rows locked
+(a sync run waits for it): a row that no longer fits (not in the view
+member_sync_mail_due) is deleted unsent; a due one is sent, the invitation with the frontend's Member:send_invitation(),
+"locked" and "unlocked" with the texts above (each #{base_url} in them
+replaced by the frontend's config.absolute_base_url, with one final
+slash) through net.send_mail and the
+frontend's mail settings; a row is deleted after a successful send only. Prints "<n> sent, <n> failed";
+exit status 1 if any send failed (the row stays queued) or on any error.
+It needs sendmail as the frontend's notification mails do.
+
+Migration from the old sync (once, before the first run; member_sync.sql
+applied, both timers stopped, after a database dump): the old rows hold
+the old pseudonyms (base64 of Rijndael-256 of the id, admidio-old
+adm_api/adm1.php). As the owner of the tables (e.g. lqfb), with a copy of
+the secrets file and a file with the old key (a final line break is
+ignored), both readable by that user only and deleted afterwards:
+$ php member-sync-migrate.php --expect=<n> --legacy-key-file=<file> \
+    --secrets=<file> --dry-run
+then the same without --dry-run. It fetches the list as member-sync.php
+does and, in one transaction: gives the rows with a listed member's old
+pseudonym (not 'Austritt') the new one, refused unless there are exactly
+<n> of them; clears the identification of 'Austritt' rows that still hold
+an old pseudonym; deletes the sessions and the privileges in the managed
+units of the other locked non-admin rows (the sync does not manage them).
+It prints counts only. Then member-sync.php, the mail timer still off:
+1. a dry run;
+2. a real run with 'removals' => 'off' (the additions only);
+3. check the counts, in particular the "would ..." ones;
+4. the mail timer on (the invitation and "unlocked" mails go out);
+5. 'removals' => 'on' and the sync timer on.
+
+Recovery: an account locked by mistake is unlocked by the next correct
+run, or by hand as the owner of the tables:
+  UPDATE member SET locked = FALSE WHERE id = <id>;
+Deleting or anonymising a member who left cannot be undone (backups only).
+
+Deployment needs (the deployment repository does this):
+- PHP 8.5 (packages.sury.org): packages php8.5-cli and php8.5-pgsql;
+- OS user and database role lqfb_membersync (see above);
+- member_sync.sql applied on every deployment as above;
+- the Admidio certificate and the secrets file;
+- the frontend that no longer shows or edits the identification
+  (uniliquid/frontend) deployed BEFORE member_sync.sql is applied for the
+  first time;
+- systemd units for member-sync.php (as lqfb_membersync) and for
+  lf_member_sync_mail (as the owner of the tables, with the frontend's
+  sendmail exceptions): the sync every 10 minutes, the mail worker
+  started right after each sync run; enabled as in the first-run steps
+  above (removals off until checked);
+- outgoing HTTPS from Liquid to the Admidio add-ons' listener allowed.
+
+Tests (Docker): tests/run.sh
