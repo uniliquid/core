@@ -136,7 +136,7 @@ CREATE TRIGGER "update_text_search_data"
   BEFORE INSERT OR UPDATE ON "member"
   FOR EACH ROW EXECUTE PROCEDURE
   tsvector_update_trigger('text_search_data', 'pg_catalog.simple',
-    "name", "organizational_unit", "internal_posts",
+    "name", "identification", "organizational_unit", "internal_posts",
     "realname", "external_memberships", "external_posts", "statement" );
 
 COMMENT ON TABLE "member" IS 'Users of the system, e.g. members of an organization';
@@ -4840,7 +4840,6 @@ CREATE FUNCTION "delete_private_data"()
         "notify_level"                 = NULL,
         "password_reset_secret"        = NULL,
         "password_reset_secret_expiry" = NULL,
-        "identification"               = NULL,
         "organizational_unit"          = NULL,
         "internal_posts"               = NULL,
         "realname"                     = NULL,
@@ -4873,10 +4872,6 @@ CREATE FUNCTION "delete_private_data"()
       DELETE FROM "direct_voter" USING "issue"
         WHERE "direct_voter"."issue_id" = "issue"."id"
         AND "issue"."closed" ISNULL;
-      -- the mail queue of member_sync.sql, if applied
-      IF to_regclass('member_sync_mail') NOTNULL THEN
-        DELETE FROM "member_sync_mail";
-      END IF;
       RETURN;
     END;
   $$;

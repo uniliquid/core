@@ -72,9 +72,13 @@ JSON list, one object per Admidio member with exactly these keys:
    "eligible": <true or false>,
    "email": <address or null>,
    "regions": [<distinct NUTS-3 codes of region_map>, ...]}
+member-sync.php replaces each id by its pseudonym, 'mv:' and the
+lowercase hex HMAC-SHA256 of the decimal id with the pseudonym key (see
+"Secrets file"), so the Liquid database never holds Admidio user ids.
 An empty list, or any entry that does not fit, rejects the whole list
-(nothing is written). "email" must be null or at most 254 characters of
-the form local@domain: the local part dot-separated atoms of letters,
+(nothing is written), as does a list that matches none of the existing
+'mv:' rows (e.g. pseudonyms made with another key). "email" must be null
+or at most 254 characters of the form local@domain: the local part dot-separated atoms of letters,
 digits and !#$%&'*+/=?^_`{|}~- ; the domain at least two dot-separated
 labels of letters, digits and inner hyphens. The producer sends null for
 any other address.
@@ -84,8 +88,9 @@ Admidio side (its liquid_region_plz table) without the matching map entry
 here rejects the whole list, so every run fails until the maps are
 updated and member_sync.sql is applied again.
 
-What the sync does, only to rows with identification 'mv:<id>' (all other
-rows, e.g. test, service or old rows, are never touched):
+What the sync does, only to rows with identification 'mv:' and 64
+lowercase hex digits (all other rows, e.g. test, service or old rows, are
+never touched):
 - eligible, no row, with email: new account and an invitation;
 - eligible and locked: unlocked; the "unlocked" mail if activated and
   active, the invitation again if never activated and without an invite
@@ -119,10 +124,9 @@ with, for example,
   managed_units='[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]'
 The maps are baked into public.member_sync_units(); managed_units must
 contain unit 1 and every unit of the maps, all existing. lqfb_membersync
-may only execute public.member_sync(). member_sync.sql also replaces
-delete_private_data() (the export clears identification and the mail
-queue) and the member search trigger (identification is not indexed), as
-in core.sql; on an existing database the search data is refreshed once.
+may only execute public.member_sync(). The mail queue holds member id,
+kind and time of each unsent mail; a row is deleted once its mail is
+sent, so an lf_export dump contains only the unsent ones.
 
 Secrets file (outside any document root; root:lqfb_membersync 0640),
 passed with --secrets=<file> or the environment variable
@@ -131,11 +135,19 @@ MEMBER_SYNC_SECRETS:
       'url' => 'https://<Admidio internal address>:<port>/liquid-members.php',
       'token' => '<the token of the Admidio side, 64 lowercase hex digits>',
       'cafile' => '<the Admidio certificate, PEM>',
+      'pseudonym_key' => '<at least 32 random bytes, lowercase hex>',
       'dsn' => 'pgsql:dbname=liquid_feedback',
       'user' => 'lqfb_membersync',
   ];
 No password: peer authentication, so the OS user running the sync is also
-named lqfb_membersync.
+named lqfb_membersync. Make the pseudonym key once with
+  openssl rand -hex 32
+and keep it (backup with the secrets): every 'mv:' row depends on it; the
+sync refuses to run without a valid one. With the key, an Admidio id can
+be linked to its Liquid row; without it, not. A new key needs a rewrite
+of the rows: with both timers stopped, set each listed member's
+identification from the old to the new pseudonym in one transaction, then
+replace the key (a run with the new key alone is refused, see above).
 
 Running (PHP 8.4 CLI with pdo_pgsql, as lqfb_membersync, e.g. hourly by a
 systemd timer, Type=oneshot):
@@ -168,6 +180,23 @@ it) and sent, the invitation with the frontend's Member:send_invitation(),
 frontend's mail settings; a row is deleted after a successful send only. Prints "<n> sent, <n> failed";
 exit status 1 if any send failed (the row stays queued) or on any error.
 It needs sendmail as the frontend's notification mails do.
+
+Migration from the old sync (once, before the first run; member_sync.sql
+applied, both timers stopped, after a database dump): the old rows hold
+the old pseudonyms (base64 of Rijndael-256 of the id, admidio-old
+adm_api/adm1.php). As the owner of the tables (e.g. lqfb), with a copy of
+the secrets file and a file with the old key (a final line break is
+ignored), both readable by that user only and deleted afterwards:
+$ php member-sync-migrate.php --expect=<n> --legacy-key-file=<file> \
+    --secrets=<file> --dry-run
+then the same without --dry-run. It fetches the list as member-sync.php
+does and, in one transaction: gives the rows with a listed member's old
+pseudonym (not 'Austritt') the new one, refused unless there are exactly
+<n> of them; clears the identification of 'Austritt' rows that still hold
+an old pseudonym; deletes the sessions and the privileges in the managed
+units of the other locked non-admin rows (the sync does not manage them).
+It prints counts only. Then a dry run of member-sync.php, a real run, and
+the timers on.
 
 Recovery: an account locked by mistake is unlocked by the next correct
 run, or by hand as the owner of the tables:

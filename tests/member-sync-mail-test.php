@@ -68,8 +68,8 @@ check('SQL: the worker has its statements', count($statements) === 9 && $stale !
 
 $db = synced_database();
 $owner = connect($db);
-$replacedId = member($owner, ['identification' => 'mv:1', 'notify_email' => 'm1@example.org']);
-$staleId = member($owner, ['identification' => 'mv:2', 'notify_email' => 'm2@example.org']);
+$replacedId = member($owner, ['identification' => mv(1), 'notify_email' => 'm1@example.org']);
+$staleId = member($owner, ['identification' => mv(2), 'notify_email' => 'm2@example.org']);
 // Both "locked" rows are stale (the members are not locked).
 $owner->exec("INSERT INTO member_sync_mail (member_id, kind) VALUES ($replacedId, 'locked'), ($staleId, 'locked')");
 // The sync replaces one row (an invite, which fits) while the stale delete waits for its lock.
@@ -115,7 +115,7 @@ $memberLock = array_values(array_filter($statements, fn ($sql) => str_starts_wit
 $queueLock = array_values(array_filter($statements, fn ($sql) => str_starts_with($sql, 'SELECT NULL FROM member_sync_mail WHERE')))[0];
 $db = synced_database();
 $owner = connect($db);
-$id = member($owner, ['identification' => 'mv:1', 'notify_email' => 'm1@example.org']);
+$id = member($owner, ['identification' => mv(1), 'notify_email' => 'm1@example.org']);
 $owner->exec("INSERT INTO member_sync_mail (member_id, kind) VALUES ($id, 'invite')");
 $first = connect($db);
 $first->beginTransaction();

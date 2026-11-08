@@ -1,8 +1,7 @@
 <?php
 
 // Tests of member_sync.sql (the apply, public.member_sync(), the mail queue
-// views, the changed delete_private_data() and search trigger), run by
-// tests/run.sh. Each case works on its own copy of the database. Synthetic
+// views), run by tests/run.sh. Each case works on its own copy of the database. Synthetic
 // data only.
 
 require __DIR__ . '/lib.php';
@@ -21,20 +20,20 @@ check('apply: a second apply succeeds (idempotent)', $status === 0);
 
 // The maps are baked in at apply time: a new apply with other maps changes them.
 $db = synced_database();
-check('apply: AT221 maps to unit 11', sync($db, [entry(1, true, null, ['AT221'])]) !== '' && units(connect($db), id_of(connect($db), 'mv:1')) === [1, 11]);
+check('apply: AT221 maps to unit 11', sync($db, [entry(1, true, null, ['AT221'])]) !== '' && units(connect($db), id_of(connect($db), mv(1))) === [1, 11]);
 [$status] = apply_member_sync($db, LO_MAP, '{"AT130": 2, "AT221": 12}', '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]');
 check('apply: changed maps applied', $status === 0);
 check('apply: changed maps in effect (AT221 now unit 12, unit 11 removed)', sync($db, [entry(1, true, null, ['AT221'])])
-    === counts(['privileges_granted' => 1, 'privileges_revoked' => 1]) && units(connect($db), id_of(connect($db), 'mv:1')) === [1, 12]);
+    === counts(['privileges_granted' => 1, 'privileges_revoked' => 1]) && units(connect($db), id_of(connect($db), mv(1))) === [1, 12]);
 [$status] = apply_member_sync($db, LO_MAP, '{"AT130": 2}', '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]');
 check('apply: a region dropped from the map', $status === 0);
 check('apply: a region dropped from the map is refused in the list', sync($db, [entry(1, true, null, ['AT221'])]) === '22023');
 check('apply: unit of a dropped region cleaned up (still managed)', sync($db, [entry(1)]) === counts(['privileges_revoked' => 1])
-    && units(connect($db), id_of(connect($db), 'mv:1')) === [1]);
+    && units(connect($db), id_of(connect($db), mv(1))) === [1]);
 [$status] = apply_member_sync($db);
-connect($db)->exec("INSERT INTO privilege (unit_id, member_id) SELECT 12, id FROM member WHERE identification = 'mv:1'");
+connect($db)->exec("INSERT INTO privilege (unit_id, member_id) SELECT 12, id FROM member WHERE identification = '" . mv(1) . "'");
 check('apply: a unit no longer managed is left alone', $status === 0 && sync($db, [entry(1)]) === counts()
-    && units(connect($db), id_of(connect($db), 'mv:1')) === [1, 12]);
+    && units(connect($db), id_of(connect($db), mv(1))) === [1, 12]);
 
 // Refused applies: psql stops, nothing changes (one transaction).
 $db = synced_database();
@@ -106,7 +105,7 @@ unset($admin);
 // Privileges: lqfb_membersync may only execute public.member_sync().
 $db = synced_database();
 $owner = connect($db);
-active_member($owner, 'mv:1');
+active_member($owner, mv(1));
 $admin = connect($db, 'postgres');
 $admin->exec('CREATE ROLE other_' . getmypid() . ' LOGIN');
 $grants = $admin->query("SELECT
@@ -146,8 +145,8 @@ unset($admin);
 
 $db = synced_database();
 $owner = connect($db);
-active_member($owner, 'mv:1', ['locked' => true]);
-active_member($owner, 'mv:2');
+active_member($owner, mv(1), ['locked' => true]);
+active_member($owner, mv(2));
 $before = state($owner);
 $long = str_repeat('a', 64) . '@' . str_repeat('b', 63) . '.' . str_repeat('c', 63) . '.' . str_repeat('d', 57) . '.org';
 $rejected = [
@@ -157,20 +156,20 @@ $rejected = [
     'an entry not an object' => [entry(1), 2],
     'a key missing' => [array_diff_key(entry(1), ['regions' => 0])],
     'an extra key' => [entry(1) + ['name' => 'x']],
-    'id 0' => [entry(0)],
-    'id negative' => [entry(-1)],
-    'id a string' => [['id' => '1'] + entry(1)],
-    'id a float' => ['[{"id": 1.5, "lo": null, "eligible": true, "email": null, "regions": []}]'],
-    'id 1.0' => ['[{"id": 1.0, "lo": null, "eligible": true, "email": null, "regions": []}]'],
-    'id too large' => [entry(2147483648)],
-    'id null' => [['id' => null] + entry(1)],
-    'duplicate id' => [entry(1), entry(1, false)],
+    'an Admidio id instead of the identification' => ['[{"id": 1, "lo": null, "eligible": true, "email": null, "regions": []}]'],
+    'identification a number' => [['identification' => 1] + entry(1)],
+    'identification null' => [['identification' => null] + entry(1)],
+    'identification mv:<id>' => [['identification' => 'mv:1'] + entry(1)],
+    'identification upper case hex' => [['identification' => strtoupper(mv(1))] + entry(1)],
+    'identification too short' => [['identification' => substr(mv(1), 0, -1)] + entry(1)],
+    'identification with a line break' => [['identification' => mv(1) . "\n"] + entry(1)],
+    'duplicate identification' => [entry(1), entry(1, false)],
     'eligible a string' => [['eligible' => 'true'] + entry(1)],
     'eligible null' => [['eligible' => null] + entry(1)],
     'eligible 1' => [['eligible' => 1] + entry(1)],
     'lo a string' => [entry(1, true, '38')],
     'lo not in the map' => [entry(1, true, 46)],
-    'lo 38.0' => ['[{"id": 1, "lo": 38.0, "eligible": true, "email": null, "regions": []}]'],
+    'lo 38.0' => ['[{"identification": "' . mv(1) . '", "lo": 38.0, "eligible": true, "email": null, "regions": []}]'],
     'regions null' => [['regions' => null] + entry(1)],
     'regions a string' => [['regions' => 'AT130'] + entry(1)],
     'regions an object' => [['regions' => ['a' => 'AT130']] + entry(1)],
@@ -206,12 +205,12 @@ $db = synced_database();
 $owner = connect($db);
 $result = sync($db, [entry(1, true, 38, ['AT130']), entry(2, true, null, [], null), entry(3, false)]);
 check('create: counts (created, privileges, no email)', $result === counts(['created' => 1, 'privileges_granted' => 3, 'no_email' => 1]));
-$new = row($owner, "SELECT * FROM member WHERE identification = 'mv:1'");
-check('create: row with mv:<id> and the email, unlocked, not active', $new !== false && $new['notify_email'] === 'member1@example.org'
+$new = row($owner, "SELECT * FROM member WHERE identification = ?", [mv(1)]);
+check('create: row with mv:<pseudonym> and the email, unlocked, not active', $new !== false && $new['notify_email'] === 'member1@example.org'
     && $new['locked'] === false && $new['active'] === false && $new['activated'] === null && $new['invite_code'] === null);
 check('create: units 1, LO and region', units($owner, $new['id']) === [1, 2, 6]);
 check('create: invite queued', queued($owner, $new['id']) === 'invite');
-check('create: no row without an email or when not eligible', id_of($owner, 'mv:2') === null && id_of($owner, 'mv:3') === null);
+check('create: no row without an email or when not eligible', id_of($owner, mv(2)) === null && id_of($owner, mv(3)) === null);
 check('create: invite due', column($owner, 'SELECT kind FROM member_sync_mail_due WHERE member_id = ?', [$new['id']]) === ['invite']);
 check('second identical run: no changes (no_email is a count, not a change)', sync($db, [entry(1, true, 38, ['AT130']),
     entry(2, true, null, [], null), entry(3, false)]) === counts(['no_email' => 1]));
@@ -221,24 +220,24 @@ $db = synced_database();
 $owner = connect($db);
 sync($db, [entry(1, true, 37, ['AT130']), entry(2, true, 39, ['AT130']), entry(3, true, 38, ['AT221']),
     entry(4, true, 38, ['AT130', 'AT221'])]);
-check('units: LO Wien + AT130 -> unit 2 once', units($owner, id_of($owner, 'mv:1')) === [1, 2]);
-check('units: LO NOe + AT130 -> 4 and 2', units($owner, id_of($owner, 'mv:2')) === [1, 2, 4]);
-check('units: AT221 -> 11', units($owner, id_of($owner, 'mv:3')) === [1, 6, 11]);
-check('units: two regions -> both', units($owner, id_of($owner, 'mv:4')) === [1, 2, 6, 11]);
+check('units: LO Wien + AT130 -> unit 2 once', units($owner, id_of($owner, mv(1))) === [1, 2]);
+check('units: LO NOe + AT130 -> 4 and 2', units($owner, id_of($owner, mv(2))) === [1, 2, 4]);
+check('units: AT221 -> 11', units($owner, id_of($owner, mv(3))) === [1, 6, 11]);
+check('units: two regions -> both', units($owner, id_of($owner, mv(4))) === [1, 2, 6, 11]);
 $result = sync($db, [entry(1, true, 37, []), entry(2, true, 41, ['AT130']), entry(3, true, null, ['AT221']), entry(4, true, 38, ['AT130'])]);
 check('units: LO moved, region dropped, LO dropped (counts)', $result === counts(['privileges_granted' => 1, 'privileges_revoked' => 3]));
-check('units: Wien without AT130 keeps unit 2 (LO)', units($owner, id_of($owner, 'mv:1')) === [1, 2]);
-check('units: LO move 4 -> 5, region kept', units($owner, id_of($owner, 'mv:2')) === [1, 2, 5]);
-check('units: LO null -> LO unit removed', units($owner, id_of($owner, 'mv:3')) === [1, 11]);
-check('units: region dropped -> removed', units($owner, id_of($owner, 'mv:4')) === [1, 2, 6]);
+check('units: Wien without AT130 keeps unit 2 (LO)', units($owner, id_of($owner, mv(1))) === [1, 2]);
+check('units: LO move 4 -> 5, region kept', units($owner, id_of($owner, mv(2))) === [1, 2, 5]);
+check('units: LO null -> LO unit removed', units($owner, id_of($owner, mv(3))) === [1, 11]);
+check('units: region dropped -> removed', units($owner, id_of($owner, mv(4))) === [1, 2, 6]);
 
 // Unlock.
 $db = synced_database();
 $owner = connect($db);
-$activeId = active_member($owner, 'mv:1', ['locked' => true, 'invite_code' => 'CODE1']);
-$inactiveId = active_member($owner, 'mv:2', ['locked' => true, 'active' => false, 'notify_email' => 'member2@example.org']);
-$neverId = member($owner, ['identification' => 'mv:3', 'locked' => true, 'notify_email' => 'member3@example.org']);
-$codeId = member($owner, ['identification' => 'mv:4', 'locked' => true, 'notify_email' => 'member4@example.org', 'invite_code' => 'CODE4']);
+$activeId = active_member($owner, mv(1), ['locked' => true, 'invite_code' => 'CODE1']);
+$inactiveId = active_member($owner, mv(2), ['locked' => true, 'active' => false, 'notify_email' => 'member2@example.org']);
+$neverId = member($owner, ['identification' => mv(3), 'locked' => true, 'notify_email' => 'member3@example.org']);
+$codeId = member($owner, ['identification' => mv(4), 'locked' => true, 'notify_email' => 'member4@example.org', 'invite_code' => 'CODE4']);
 $owner->exec("UPDATE member SET notify_email = 'member1@example.org' WHERE id = $activeId");
 $result = sync($db, [entry(1), entry(2), entry(3), entry(4)]);
 check('unlock: counts', $result === counts(['unlocked' => 4, 'privileges_granted' => 4]));
@@ -252,7 +251,7 @@ check('unlock: never activated, with an invite code -> no mail', queued($owner, 
 // Lock.
 $db = synced_database();
 $owner = connect($db);
-$id = active_member($owner, 'mv:1', ['notify_email' => 'member1@example.org']);
+$id = active_member($owner, mv(1), ['notify_email' => 'member1@example.org']);
 $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (1, $id), (6, $id)");
 $owner->exec("INSERT INTO session (ident, member_id) VALUES ('s1', $id), ('s2', $id)");
 $owner->exec("INSERT INTO member_sync_mail (member_id, kind) VALUES ($id, 'unlocked')");
@@ -269,7 +268,7 @@ check('lock: second run, no changes', sync($db, [entry(1, false, 38)]) === count
 // Reconcile: an already-locked row with leftover sessions and rights.
 $db = synced_database();
 $owner = connect($db);
-$id = active_member($owner, 'mv:1', ['locked' => true]);
+$id = active_member($owner, mv(1), ['locked' => true]);
 $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (1, $id)");
 $owner->exec("INSERT INTO session (ident, member_id) VALUES ('s1', $id)");
 check('reconcile: already locked, leftovers removed (no lock counted)', sync($db, [entry(1, false)]) === counts(['privileges_revoked' => 1]));
@@ -281,7 +280,7 @@ $db = synced_database();
 $owner = connect($db);
 $list = [];
 for ($i = 1; $i <= 30; $i++) {
-    active_member($owner, "mv:$i", ['notify_email' => "member$i@example.org"]);
+    active_member($owner, mv($i), ['notify_email' => "member$i@example.org"]);
     $list[] = entry($i, false);
 }
 check('mass lock: all 30 locked', sync($db, $list)['locked'] === 30);
@@ -289,15 +288,15 @@ check('mass lock: all 30 locked', sync($db, $list)['locked'] === 30);
 // Email (R2).
 $db = synced_database();
 $owner = connect($db);
-$inactiveId = active_member($owner, 'mv:1', ['active' => false, 'invite_code' => 'CODE1', 'notify_email_unconfirmed' => 'pending@example.org',
+$inactiveId = active_member($owner, mv(1), ['active' => false, 'invite_code' => 'CODE1', 'notify_email_unconfirmed' => 'pending@example.org',
     'notify_email_secret' => 'SECRET1', 'notify_email_secret_expiry' => '2030-01-01',
     'password_reset_secret' => 'RESET1', 'password_reset_secret_expiry' => '2030-01-01']);
-$activeId = active_member($owner, 'mv:2', ['notify_email_unconfirmed' => 'pending2@example.org', 'notify_email_secret' => 'SECRET2']);
-$neverId = member($owner, ['identification' => 'mv:3', 'notify_email' => 'old3@example.org', 'invite_code' => 'CODE3',
+$activeId = active_member($owner, mv(2), ['notify_email_unconfirmed' => 'pending2@example.org', 'notify_email_secret' => 'SECRET2']);
+$neverId = member($owner, ['identification' => mv(3), 'notify_email' => 'old3@example.org', 'invite_code' => 'CODE3',
     'password_reset_secret' => 'RESET3']);
-$sameId = member($owner, ['identification' => 'mv:4', 'notify_email' => 'member4@example.org', 'notify_email_secret' => 'SECRET4']);
-$ineligibleId = member($owner, ['identification' => 'mv:5', 'notify_email' => 'old5@example.org']);
-$nullId = member($owner, ['identification' => 'mv:6', 'notify_email' => 'old6@example.org']);
+$sameId = member($owner, ['identification' => mv(4), 'notify_email' => 'member4@example.org', 'notify_email_secret' => 'SECRET4']);
+$ineligibleId = member($owner, ['identification' => mv(5), 'notify_email' => 'old5@example.org']);
+$nullId = member($owner, ['identification' => mv(6), 'notify_email' => 'old6@example.org']);
 $owner->exec('INSERT INTO privilege (unit_id, member_id) SELECT 1, id FROM member');
 $result = sync($db, [entry(1), entry(2), entry(3), entry(4), entry(5, false), entry(6, true, null, [], null)]);
 check('email: counts', $result === counts(['email_updated' => 2, 'locked' => 1, 'privileges_revoked' => 1]));
@@ -351,16 +350,16 @@ $db = synced_database();
 $owner = connect($db);
 $authorId = active_member($owner, null);
 [$issue, $initiative, $draft] = issue_fixture($owner, $authorId);
-$plainId = active_member($owner, 'mv:1');
-$neverId = member($owner, ['identification' => 'mv:2', 'notify_email' => 'member2@example.org']);
-$coId = active_member($owner, 'mv:3', ['realname' => 'Real Name', 'statement' => 'Statement', 'invite_code' => 'CODE3',
+$plainId = active_member($owner, mv(1));
+$neverId = member($owner, ['identification' => mv(2), 'notify_email' => 'member2@example.org']);
+$coId = active_member($owner, mv(3), ['realname' => 'Real Name', 'statement' => 'Statement', 'invite_code' => 'CODE3',
     'admin_comment' => 'note']);
-$trusteeId = active_member($owner, 'mv:4');
-$supporterId = active_member($owner, 'mv:5');
-$voterId = active_member($owner, 'mv:6');
-$authorOnlyId = active_member($owner, 'mv:7');
-$interestId = active_member($owner, 'mv:9');
-$commenterId = active_member($owner, 'mv:10');
+$trusteeId = active_member($owner, mv(4));
+$supporterId = active_member($owner, mv(5));
+$voterId = active_member($owner, mv(6));
+$authorOnlyId = active_member($owner, mv(7));
+$interestId = active_member($owner, mv(9));
+$commenterId = active_member($owner, mv(10));
 $owner->exec("INSERT INTO initiator (initiative_id, member_id) VALUES ($initiative, $coId)");
 $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (1, $coId), (12, $coId)");
 $owner->exec("INSERT INTO privilege (unit_id, member_id, polling_right) VALUES (2, $coId, TRUE)");
@@ -377,7 +376,7 @@ $owner->exec("INSERT INTO issue_comment (issue_id, member_id, content) VALUES ($
 // DELETE fails, the member is anonymised.
 $owner->exec("INSERT INTO draft (initiative_id, author_id, content) VALUES ($initiative, $authorOnlyId, 'Text 2')");
 $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (1, $plainId)");
-$stayId = active_member($owner, 'mv:8');
+$stayId = active_member($owner, mv(8));
 $result = sync($db, [entry(8)]);
 check('leavers: counts', $result === counts(['deleted' => 2, 'anonymised' => 7, 'privileges_granted' => 1]));
 check('leavers: unreferenced rows deleted', row($owner, 'SELECT count(*) AS n FROM member WHERE id IN (?, ?)', [$plainId, $neverId])['n'] === 0);
@@ -397,7 +396,7 @@ check('leavers: support and interest intact', (int) $owner->query("SELECT count(
     && (int) $owner->query("SELECT count(*) FROM interest WHERE member_id = $interestId")->fetchColumn() === 1);
 check('leavers: issue comment intact', (int) $owner->query("SELECT count(*) FROM issue_comment WHERE member_id = $commenterId")->fetchColumn() === 1);
 check('leavers: name kept (as before)', $owner->query("SELECT name FROM member WHERE id = $coId")->fetchColumn() !== null);
-check('leavers: the listed member stays', id_of($owner, 'mv:8') === $stayId);
+check('leavers: the listed member stays', id_of($owner, mv(8)) === $stayId);
 check('leavers: second run, no changes (anonymised rows are no longer owned)', sync($db, [entry(8)]) === counts());
 
 // A deferred constraint trigger that fails after the DELETE (test only, on a
@@ -405,11 +404,12 @@ check('leavers: second run, no changes (anonymised rows are no longer owned)', s
 // inside the sub-block (SET CONSTRAINTS ALL IMMEDIATE), not at COMMIT.
 $db = synced_database();
 $owner = connect($db);
-$leaverId = active_member($owner, 'mv:1');
+$leaverId = active_member($owner, mv(1));
+active_member($owner, mv(2));
 $owner->exec("INSERT INTO member_history (member_id, active, name) VALUES ($leaverId, TRUE, 'Old name')");
 $owner->exec("CREATE FUNCTION test_fail() RETURNS trigger LANGUAGE plpgsql AS \$\$ BEGIN RAISE EXCEPTION 'deferred failure'; END \$\$");
 $owner->exec('CREATE CONSTRAINT TRIGGER test_fail AFTER DELETE ON member_history DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION test_fail()');
-check('deferred failure: anonymised, the run commits', sync($db, [entry(2)]) === counts(['created' => 1, 'anonymised' => 1, 'privileges_granted' => 1]));
+check('deferred failure: anonymised, the run commits', sync($db, [entry(2)]) === counts(['anonymised' => 1, 'privileges_granted' => 1]));
 check('deferred failure: the row stays, anonymised', $owner->query("SELECT admin_comment FROM member WHERE id = $leaverId")->fetchColumn() === 'Austritt');
 
 // A lock timeout in the DELETE (a row it cascades to, and the anonymisation
@@ -417,7 +417,8 @@ check('deferred failure: the row stays, anonymised', $owner->query("SELECT admin
 // anonymising the member.
 $db = synced_database();
 $owner = connect($db);
-$leaverId = active_member($owner, 'mv:1');
+$leaverId = active_member($owner, mv(1));
+active_member($owner, mv(2));
 $owner->exec("INSERT INTO member_history (member_id, active, name) VALUES ($leaverId, TRUE, 'Old name')");
 $before = state($owner);
 $holder = connect($db);
@@ -432,9 +433,9 @@ unset($holder);
 
 $db = synced_database();
 $owner = connect($db);
-$eligibleId = active_member($owner, 'mv:1', ['admin' => true]);
-$ineligibleId = active_member($owner, 'mv:2', ['admin' => true]);
-$leftId = active_member($owner, 'mv:3', ['admin' => true]);
+$eligibleId = active_member($owner, mv(1), ['admin' => true]);
+$ineligibleId = active_member($owner, mv(2), ['admin' => true]);
+$leftId = active_member($owner, mv(3), ['admin' => true]);
 $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (1, $ineligibleId), (1, $leftId), (12, $leftId)");
 $owner->exec("INSERT INTO session (ident, member_id) VALUES ('a2', $ineligibleId), ('a3', $leftId)");
 $result = sync($db, [entry(1, true, 38), entry(2, false)]);
@@ -442,7 +443,7 @@ check('admins: counts', $result === counts(['locked' => 2, 'privileges_granted' 
 check('admins: eligible admin synced', units($owner, $eligibleId) === [1, 6]);
 $admins = $owner->query("SELECT id, admin, locked, identification, admin_comment FROM member WHERE admin ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
 check('admins: ineligible and departed admins locked, kept, admin flag unchanged', count($admins) === 3
-    && $admins[1]['locked'] === true && $admins[2]['locked'] === true && $admins[2]['identification'] === 'mv:3'
+    && $admins[1]['locked'] === true && $admins[2]['locked'] === true && $admins[2]['identification'] === mv(3)
     && $admins[2]['admin_comment'] === null && $admins[0]['locked'] === false);
 check('admins: sessions deleted, managed privileges revoked, unmanaged kept', (int) $owner->query('SELECT count(*) FROM session')->fetchColumn() === 0
     && privileges($owner, $ineligibleId) === [] && privileges($owner, $leftId) === ['12:11']);
@@ -453,7 +454,7 @@ check('admins: second run, no changes', sync($db, [entry(1, true, 38), entry(2, 
 
 $db = synced_database();
 $owner = connect($db);
-$id = active_member($owner, 'mv:1');
+$id = active_member($owner, mv(1));
 $owner->exec("INSERT INTO privilege (unit_id, member_id, voting_right, initiative_right) VALUES (1, $id, FALSE, TRUE)");
 $owner->exec("INSERT INTO privilege (unit_id, member_id, voting_right, initiative_right) VALUES (6, $id, TRUE, FALSE)");
 $owner->exec("INSERT INTO privilege (unit_id, member_id, unit_manager) VALUES (3, $id, TRUE)");
@@ -479,7 +480,8 @@ check('flags: lock keeps the manager rows, clears the flags', sync($db, [entry(1
 $db = synced_database();
 $owner = connect($db);
 $foreign = [];
-foreach ([null, '12345678', 'aGVsbG8gd29ybGQ=', 'mv:0', 'mv:x', 'mv:01', 'mv:1 ', 'xmv:1', 'MV:1', 'mv:'] as $identification) {
+foreach ([null, '12345678', 'aGVsbG8gd29ybGQ=', 'mv:1', 'mv:' . str_repeat('g', 64), substr(mv(3), 0, -1), mv(3) . '0', mv(3) . ' ',
+    'x' . mv(3), strtoupper(mv(3))] as $identification) {
     $foreign[] = active_member($owner, $identification, ['locked' => true, 'admin_comment' => 'Austritt']);
 }
 $owner->exec('INSERT INTO privilege (unit_id, member_id) SELECT 1, id FROM member');
@@ -487,14 +489,14 @@ $owner->exec("INSERT INTO session (ident, member_id) SELECT 'f' || id, id FROM m
 $digest = fn () => $owner->query('SELECT md5(string_agg(t::text, \'|\' ORDER BY t::text)) FROM member t WHERE id IN ('
     . implode(',', $foreign) . ')')->fetchColumn();
 $before = $digest();
-check('not owned: the run creates mv:1 only', sync($db, [entry(1), entry(2, false)]) === counts(['created' => 1, 'privileges_granted' => 1]));
-check('not owned: rows without ^mv:[1-9][0-9]*$ untouched (not deleted, unlocked or cleaned)', $digest() === $before
+check('not owned: the run creates the row of id 1 only', sync($db, [entry(1), entry(2, false)]) === counts(['created' => 1, 'privileges_granted' => 1]));
+check('not owned: rows without ^mv:[0-9a-f]{64}$ untouched (not deleted, unlocked or cleaned)', $digest() === $before
     && (int) $owner->query('SELECT count(*) FROM privilege WHERE member_id IN (' . implode(',', $foreign) . ')')->fetchColumn() === 10
     && (int) $owner->query('SELECT count(*) FROM session')->fetchColumn() === 10);
 $db2 = synced_database();
 $o2 = connect($db2);
 $ids = [];
-foreach (['mv:0', 'mv:x', 'mv:01', 'xmv:1', 'MV:1'] as $identification) {
+foreach (['mv:1', 'x' . mv(1), strtoupper(mv(1)), mv(1) . '0', 'mv:'] as $identification) {
     $ids[] = active_member($o2, $identification);
 }
 $before = $o2->query('SELECT md5(string_agg(t::text, \'|\' ORDER BY t::text)) FROM member t')->fetchColumn();
@@ -506,7 +508,7 @@ check('not owned: unlisted foreign rows are not leavers', $o2->query('SELECT md5
 
 $db = synced_database();
 $owner = connect($db);
-$id = active_member($owner, 'mv:1', ['notify_email' => 'member1@example.org']);
+$id = active_member($owner, mv(1), ['notify_email' => 'member1@example.org']);
 sync($db, [entry(1, false)]);
 // The "locked" mail is not sent (the worker failed); the member pays again.
 sync($db, [entry(1)]);
@@ -515,7 +517,7 @@ check('queue: lock then unlock while unsent -> one row, "unlocked"', column($own
 $db = synced_database();
 $owner = connect($db);
 sync($db, [entry(1)]);
-$id = id_of($owner, 'mv:1');
+$id = id_of($owner, mv(1));
 sync($db, [entry(1, false)]);
 check('queue: a lock supersedes the unsent invite', queued($owner, $id) === 'locked');
 sync($db, [entry(1)]);
@@ -542,7 +544,7 @@ $expected = [];
 $n = 0;
 foreach ($cases as $name => [$fields, $kind, $due]) {
     $n++;
-    $memberId = member($owner, $fields + ['identification' => "mv:$n"]);
+    $memberId = member($owner, $fields + ['identification' => mv($n)]);
     $owner->exec("INSERT INTO member_sync_mail (member_id, kind) VALUES ($memberId, '$kind')");
     $expected[$name] = [$memberId, $due];
 }
@@ -559,57 +561,27 @@ check('queue view: due rows have the address and kind', array_keys(row($owner, '
 
 $db = synced_database();
 $owner = connect($db);
-active_member($owner, 'mv:1');
+active_member($owner, mv(1));
 $before = state($owner);
 $holder = connect($db, 'postgres');
 $key = (int) $owner->query("SELECT substring(prosrc FROM 'pg_try_advisory_xact_lock\\(([0-9]+)\\)') FROM pg_proc WHERE proname = 'member_sync'")->fetchColumn();
 $holder->query("SELECT pg_advisory_lock($key)");
 check('lock busy: 55P03, nothing written', $key > 0 && sync($db, [entry(2)]) === '55P03' && state($owner) === $before);
 $holder->query("SELECT pg_advisory_unlock($key)");
-check('lock free again: the run goes through', is_array(sync($db, [entry(2)])));
+check('lock free again: the run goes through', is_array(sync($db, [entry(1), entry(2)])));
 unset($holder);
 
-// --- Export and search -----------------------------------------------------------
+// --- Another key -------------------------------------------------------------------
 
 $db = synced_database();
 $owner = connect($db);
-sync($db, [entry(1), entry(2, false)]);
-active_member($owner, 'mv:3');
-check('search: mv:<id> not found', (int) $owner->query("SELECT count(*) FROM member WHERE text_search_data @@ text_search_query('mv:1')")->fetchColumn() === 0
-    && (int) $owner->query("SELECT count(*) FROM member WHERE text_search_data @@ text_search_query('mv')")->fetchColumn() === 0);
-$owner->exec('SELECT delete_private_data()');
-check('export: delete_private_data() clears identification and the queue', (int) $owner->query('SELECT count(*) FROM member WHERE identification IS NOT NULL')->fetchColumn() === 0
-    && (int) $owner->query('SELECT count(*) FROM member_sync_mail')->fetchColumn() === 0);
-$fresh = connect(database());
-$fresh->exec("INSERT INTO member (identification, notify_email) VALUES ('mv:1', 'a@example.org')");
-$fresh->exec('SELECT delete_private_data()');
-check('export: delete_private_data() without member_sync.sql (no queue table) works', (int) $fresh->query('SELECT count(*) FROM member WHERE identification IS NOT NULL')->fetchColumn() === 0);
-$core = connect('liquid_feedback');
-$coreDefinitions = $core->query("SELECT pg_get_functiondef('delete_private_data()'::regprocedure), pg_get_triggerdef(oid)
-    FROM pg_trigger WHERE tgrelid = 'member'::regclass AND tgname = 'update_text_search_data'")->fetch(PDO::FETCH_NUM);
-unset($core);
-check('core.sql: the search trigger no longer indexes identification', !str_contains($coreDefinitions[1], 'identification'));
-check('core.sql and member_sync.sql: the same delete_private_data() and search trigger', $owner->query("SELECT pg_get_functiondef('delete_private_data()'::regprocedure), pg_get_triggerdef(oid)
-    FROM pg_trigger WHERE tgrelid = 'member'::regclass AND tgname = 'update_text_search_data'")->fetch(PDO::FETCH_NUM) === $coreDefinitions);
-
-// An existing database with the old trigger and delete_private_data(): the apply replaces them and refreshes the index once.
-$db = database();
-$old = connect($db);
-$old->exec('DROP TRIGGER update_text_search_data ON member');
-$old->exec("CREATE TRIGGER update_text_search_data BEFORE INSERT OR UPDATE ON member FOR EACH ROW EXECUTE PROCEDURE
-    tsvector_update_trigger('text_search_data', 'pg_catalog.simple', name, identification, organizational_unit, internal_posts,
-    realname, external_memberships, external_posts, statement)");
-$old->exec("CREATE OR REPLACE FUNCTION delete_private_data() RETURNS void LANGUAGE plpgsql AS \$\$ BEGIN UPDATE member SET login = NULL; END \$\$");
-$old->exec("INSERT INTO member (identification, notify_email) VALUES ('mv:7', 'a@example.org'), ('other', 'b@example.org')");
-$found = (int) $old->query("SELECT count(*) FROM member WHERE text_search_data @@ text_search_query('mv:7')")->fetchColumn();
-unset($old);
-[$status] = apply_member_sync($db);
-$old = connect($db);
-check('migration: old trigger indexed the identification', $found === 1);
-check('migration: apply replaces the trigger and refreshes the index', $status === 0
-    && (int) $old->query("SELECT count(*) FROM member WHERE text_search_data @@ text_search_query('mv:7')")->fetchColumn() === 0
-    && $old->query("SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgrelid = 'member'::regclass AND tgname = 'update_text_search_data'")->fetchColumn() === $coreDefinitions[1]);
-check('migration: apply replaces delete_private_data()', $old->query("SELECT pg_get_functiondef('delete_private_data()'::regprocedure)")->fetchColumn() === $coreDefinitions[0]);
+active_member($owner, mv(1));
+active_member($owner, mv(2));
+$before = state($owner);
+$otherKey = fn ($id) => ['identification' => 'mv:' . hash_hmac('sha256', (string) $id, 'another key')] + entry($id);
+check('another key: a list that matches no owned row is rejected (22023, nothing written)',
+    sync($db, [$otherKey(1), $otherKey(2)]) === '22023' && state($owner) === $before);
+check('another key: one match is enough', is_array(sync($db, [$otherKey(1), entry(2)])));
 
 // --- Voting: what the lock means for ballots (core.sql, close_voting) -----------
 
@@ -619,7 +591,7 @@ foreach ([false => 'ballot dropped at close without the privilege', true => 'bal
     $authorId = active_member($owner, null);
     $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (1, $authorId)");
     sync($db, [entry(1)]);
-    $voterId = id_of($owner, 'mv:1');
+    $voterId = id_of($owner, mv(1));
     $owner->exec("UPDATE member SET activated = now(), last_activity = now(), active = TRUE, name = 'Voter' WHERE id = $voterId");
     [$issue, $initiative] = issue_fixture($owner, $authorId, 'voting');
     $owner->exec("INSERT INTO direct_voter (issue_id, member_id) VALUES ($issue, $voterId)");

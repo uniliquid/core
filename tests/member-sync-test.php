@@ -56,6 +56,7 @@ $secrets = [
     'url' => 'https://127.0.0.1:' . PORT . '/liquid-members.php',
     'token' => TOKEN,
     'cafile' => $serverCrt,
+    'pseudonym_key' => PSEUDONYM_KEY,
     'dsn' => 'pgsql:host=' . SOCKET . ";dbname=$db",
     'user' => 'lqfb_membersync',
 ];
@@ -105,14 +106,16 @@ function member_sync($members, $override = [], $args = [], $env = [])
 }
 
 $owner = connect($db);
-$lockedId = active_member($owner, 'mv:2', ['locked' => true, 'notify_email' => 'member2@example.org']);
-$leaverId = active_member($owner, 'mv:3');
+$lockedId = active_member($owner, mv(2), ['locked' => true, 'notify_email' => 'member2@example.org']);
+$leaverId = active_member($owner, mv(3));
 $members = [entry(1, true, 38, ['AT130']), entry(2), entry(4, false), entry(5, true, null, [], null)];
 $initial = state($owner);
+// The list as member-sync.php passes it to public.member_sync().
+$pseudonymised = fn ($members) => member_sync_pseudonymise(member_sync_parse(json_encode($members)), hex2bin(PSEUDONYM_KEY));
 
 // --- Fetch and parse ----------------------------------------------------------
 
-check('parse: a list of objects', member_sync_parse(json_encode($members)) === json_encode($members));
+check('parse: a list of objects', member_sync_parse(json_encode($members)) == json_decode(json_encode($members)));
 foreach ([
     'empty list' => '[]',
     'empty list with spaces' => " [ ]\n",
@@ -123,11 +126,28 @@ foreach ([
     'a list in a list' => '[[]]',
     'too deep' => '[{"id": 1, "lo": null, "eligible": true, "email": null, "regions": [["AT130"]]}]',
     'trailing garbage' => '[{"id": 1}] x',
+    'id missing' => '[{"lo": null}]',
+    'id null' => '[{"id": null}]',
+    'id 0' => '[{"id": 0}]',
+    'id negative' => '[{"id": -1}]',
+    'id a string' => '[{"id": "1"}]',
+    'id a float' => '[{"id": 1.5}]',
+    'id 1.0' => '[{"id": 1.0}]',
+    'id too large' => '[{"id": 2147483648}]',
+    'id far too large' => '[{"id": 99999999999999999999}]',
+    'an identification already' => '[{"id": 1, "identification": "mv:1"}]',
+    'one bad entry after a good one' => '[{"id": 1}, {"id": 0}]',
 ] as $name => $body) {
     check("parse: refused, $name", member_sync_parse($body) === null);
 }
-check('parse: large integers stay integers or fail in SQL, not floats', member_sync_parse('[{"id": 99999999999999999999}]')
-    === '[{"id":"99999999999999999999"}]');
+check('parse: id 2147483647 accepted', member_sync_parse('[{"id": 2147483647}]') !== null);
+$list = json_decode($pseudonymised([entry(1, true, 38, ['AT130']), entry(12345, false)]), true);
+check('pseudonymise: id replaced by mv:<HMAC-SHA256 of the decimal id>, the rest kept', $list === [
+    ['lo' => 38, 'eligible' => true, 'email' => 'member1@example.org', 'regions' => ['AT130'],
+        'identification' => 'mv:' . hash_hmac('sha256', '1', hex2bin(PSEUDONYM_KEY))],
+    ['lo' => null, 'eligible' => false, 'email' => 'member12345@example.org', 'regions' => [],
+        'identification' => 'mv:36e295174c2947fbba5ff2d280b635a4b2eaa3106e07c7f1f3d2b72cba861447'],
+]);
 
 // Refusals before any write: non-zero exit, a message, data unchanged.
 $refusals = [
@@ -148,6 +168,10 @@ $refusals = [
     'URL with user info' => member_sync($members, ['url' => 'https://user@127.0.0.1:' . PORT . '/liquid-members.php']),
     'cafile missing' => member_sync($members, ['cafile' => "$tmp/missing.crt"]),
     'cafile empty' => member_sync($members, ['cafile' => '']),
+    'pseudonym key missing' => member_sync($members, ['pseudonym_key' => null]),
+    'pseudonym key too short' => member_sync($members, ['pseudonym_key' => substr(PSEUDONYM_KEY, 2)]),
+    'pseudonym key odd length' => member_sync($members, ['pseudonym_key' => PSEUDONYM_KEY . '0']),
+    'pseudonym key upper case' => member_sync($members, ['pseudonym_key' => strtoupper(PSEUDONYM_KEY)]),
     'wrong database user' => member_sync($members, ['user' => 'nobody']),
     'wrong token' => member_sync($members, ['token' => strrev(TOKEN)]),
     'HTTP 500' => member_sync($members, ['url' => 'https://127.0.0.1:' . PORT . '/error']),
@@ -174,7 +198,8 @@ check('refused: messages', $refusals['wrong token'][2] === "member-sync: fetch f
     && $refusals['wrong database user'][2] === "member-sync: database: 08006; nothing written\n"
     && $refusals['token not hex'][2] === "member-sync: the token must be 64 lowercase hex digits; nothing written\n"
     && $refusals['token with a line break'][2] === "member-sync: the token must be 64 lowercase hex digits; nothing written\n"
-    && $refusals['URL with a space'][2] === "member-sync: the URL has control characters or spaces; nothing written\n");
+    && $refusals['URL with a space'][2] === "member-sync: the URL has control characters or spaces; nothing written\n"
+    && $refusals['pseudonym key too short'][2] === "member-sync: the pseudonym key must be at least 64 lowercase hex digits (an even number); nothing written\n");
 // Only member_sync()'s own texts (and the lock timeout's) are shown.
 $other = new PDOException('other');
 $other->errorInfo = ['22023', 7, "ERROR:  invalid value \"member1@example.org\"\nDETAIL: x"];
@@ -206,7 +231,7 @@ $holder->beginTransaction();
 $holder->query("SELECT * FROM member WHERE id = $lockedId FOR UPDATE");
 $writer = connect($db, 'lqfb_membersync');
 try {
-    member_sync_apply($writer, json_encode($members), false, '1s');
+    member_sync_apply($writer, $pseudonymised($members), false, '1s');
     $error = null;
 } catch (PDOException $e) {
     $error = member_sync_database_error($e);
@@ -251,7 +276,7 @@ check('dry run: the counts only, prefixed', $stdout === "dry run: 4 members: 1 c
 [$status, $stdout, $stderr] = member_sync($members);
 check('run: exit 0, summary line only', $status === 0 && $stderr === '' && $stdout === "4 members: 1 created, 1 unlocked, 0 locked, "
     . "1 deleted, 0 anonymised, 4 privileges granted, 0 privileges revoked, 0 emails updated, 1 without email\n");
-check('run: written', id_of($owner, 'mv:1') !== null && row($owner, "SELECT locked FROM member WHERE id = $lockedId")['locked'] === false
+check('run: written', id_of($owner, mv(1)) !== null && row($owner, "SELECT locked FROM member WHERE id = $lockedId")['locked'] === false
     && row($owner, "SELECT id FROM member WHERE id = $leaverId") === false);
 $synced = state($owner);
 [$status, $stdout] = member_sync($members);
@@ -260,7 +285,7 @@ check('second run: no changes', $status === 0 && str_contains($stdout, ' 0 creat
 // The lock timeout is for the transaction only, also after a commit.
 $writer = connect($db, 'lqfb_membersync');
 ob_start();
-member_sync_apply($writer, json_encode($members), false, '1s');
+member_sync_apply($writer, $pseudonymised($members), false, '1s');
 ob_end_clean();
 check('lock timeout: not left in the session after a commit', $writer->query('SHOW lock_timeout')->fetchColumn() === '0');
 unset($writer);
@@ -305,7 +330,7 @@ check('SQL error: exit 1, rolled back, SQLSTATE only', $status === 1 && $stdout 
 $admin->exec('GRANT EXECUTE ON FUNCTION public.member_sync(jsonb) TO lqfb_membersync');
 unset($admin);
 
-check('no token, emails or ids in any output', !str_contains($outputs, TOKEN) && !str_contains($outputs, '@')
+check('no token, key, emails or ids in any output', !str_contains($outputs, TOKEN) && !str_contains($outputs, PSEUDONYM_KEY) && !str_contains($outputs, '@')
     && !preg_match('/mv:|\bid\b/', $outputs));
 
 foreach ($servers as $server) {
