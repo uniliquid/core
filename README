@@ -239,4 +239,13 @@ Deployment needs (the deployment repository does this):
   above (removals off until checked);
 - outgoing HTTPS from Liquid to the Admidio add-ons' listener allowed.
 
+Voting-right statistics: lf_voting_right_stats (e.g. hourly, after the
+member sync) prepends a line per unit to
+/opt/liquid_feedback_statistics/<unit>.html (LF_STATISTICS_DIR) when it
+changed: the members with the voting right in the unit who are not locked,
+the active ones among them and the quorum ceil(n^0.6); "error3! 0" and no
+change if unit 1 has none. The frontend's static/hourly.php shows these
+files; a wiki bot fetches the quorum from /static/hourly.php, so the
+deployment must keep serving that URL (with PHP) and the directory.
+
 Tests (Docker): tests/run.sh
