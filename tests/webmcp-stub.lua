@@ -64,16 +64,10 @@ function db:query(q)
     if q == "BEGIN" then current = copy(committed) in_transaction = true return {} end
     if q == "COMMIT" then committed = current in_transaction = false return {} end
     if q == "ROLLBACK" then current = committed in_transaction = false return {} end
-    if q:find("^DELETE FROM member_sync_mail USING member_sync_mail_stale") then
+    if q:find("^SELECT member_id, kind, created::text AS created FROM member_sync_mail ORDER BY member_id$") then
       if scenario.error then error("database error") end
-      for id in pairs(current.queue) do
-        if not due(current, id) then current.queue[id] = nil end
-      end
-      return {}
-    end
-    if q:find("^SELECT member_id, kind, created::text AS created FROM member_sync_mail_due") then
       local rows, ids = {}, {}
-      for id in pairs(current.queue) do if due(current, id) then table.insert(ids, id) end end
+      for id in pairs(current.queue) do table.insert(ids, id) end
       table.sort(ids)
       for i, id in ipairs(ids) do
         rows[i] = { member_id = id, kind = current.queue[id].kind, created = current.queue[id].created }

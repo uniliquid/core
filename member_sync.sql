@@ -11,8 +11,9 @@
 --                  manages; must contain unit 1 and every unit of the maps.
 --
 -- Creates:
---   public.member_sync(jsonb)      SECURITY DEFINER; the only object the role
---                                  lqfb_membersync may use (EXECUTE).
+--   public.member_sync(jsonb, boolean)  SECURITY DEFINER; the only object the
+--                                  role lqfb_membersync may use (EXECUTE);
+--                                  the boolean: removals on (README).
 --   public.member_sync_units()     the maps, baked in at apply time.
 --   public.member_sync_owned(text) the ownership predicate: the sync only
 --                                  ever touches rows whose identification
@@ -22,8 +23,8 @@
 --                                  (one pending mail per member: member id,
 --                                  kind, time; deleted once sent, so an
 --                                  lf_export dump holds the unsent ones).
---   public.member_sync_mail_due    queued mails whose state still fits.
---   public.member_sync_mail_stale  the other queue rows (dropped unsent).
+--   public.member_sync_mail_due    queued mails whose state still fits (the
+--                                  worker deletes the others unsent).
 --
 -- The role lqfb_membersync must exist (created by the deployment).
 
@@ -136,14 +137,13 @@ CREATE OR REPLACE VIEW public.member_sync_mail_due AS
     WHEN 'unlocked' THEN NOT "member"."locked"
   END;
 
-CREATE OR REPLACE VIEW public.member_sync_mail_stale AS
-  SELECT "member_id", "kind", "created" FROM public.member_sync_mail
-  WHERE "member_id" NOT IN (SELECT "member_id" FROM public.member_sync_mail_due);
+COMMENT ON VIEW public.member_sync_mail_due IS 'Queued mails to send: owned rows with an address whose state still fits the kind (invite: never activated and not locked; locked: locked; unlocked: not locked)';
 
-COMMENT ON VIEW public.member_sync_mail_due   IS 'Queued mails to send: owned rows with an address whose state still fits the kind (invite: never activated and not locked; locked: locked; unlocked: not locked)';
-COMMENT ON VIEW public.member_sync_mail_stale IS 'Queued mails that no longer fit; the mail worker deletes them unsent';
+-- Earlier versions: member_sync(JSONB), the view member_sync_mail_stale.
+DROP FUNCTION IF EXISTS public.member_sync(JSONB);
+DROP VIEW IF EXISTS public.member_sync_mail_stale;
 
-CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
+CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BOOLEAN)
   RETURNS TABLE (
     "created"            INT4,
     "unlocked"           INT4,
@@ -319,26 +319,6 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
         ON CONFLICT ("member_id") DO UPDATE SET "kind" = EXCLUDED."kind", "created" = EXCLUDED."created"
       )
       SELECT count(*) INTO "email_updated" FROM "updated";
-      -- Listed and not eligible, or a departed admin: locked, reconciled on
-      -- every run; the "locked" mail on the transition only.
-      WITH "locked" AS (
-        UPDATE public.member SET "locked" = TRUE
-        WHERE public.member_sync_owned("identification")
-        AND NOT "identification" = ANY ("eligible_v")
-        AND ("identification" = ANY ("listed_v") OR "admin")
-        AND NOT "locked"
-        RETURNING "id"
-      ), "queued" AS (
-        INSERT INTO public.member_sync_mail ("member_id", "kind")
-        SELECT "id", 'locked' FROM "locked"
-        ON CONFLICT ("member_id") DO UPDATE SET "kind" = EXCLUDED."kind", "created" = EXCLUDED."created"
-      )
-      SELECT count(*) INTO "locked" FROM "locked";
-      DELETE FROM public.session USING public.member
-        WHERE "session"."member_id" = "member"."id"
-        AND public.member_sync_owned("member"."identification")
-        AND NOT "member"."identification" = ANY ("eligible_v")
-        AND ("member"."identification" = ANY ("listed_v") OR "member"."admin");
       -- Privileges: unit 1, the LO unit and the region units of eligible
       -- members; the sync owns voting_right and initiative_right on the
       -- managed units of listed members and admins.
@@ -359,102 +339,132 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
         ON CONFLICT ("unit_id", "member_id") DO UPDATE SET "voting_right" = TRUE, "initiative_right" = TRUE
         WHERE NOT ("privilege"."voting_right" AND "privilege"."initiative_right");
       GET DIAGNOSTICS "privileges_granted" = ROW_COUNT;
-      -- Unwanted: the row is deleted, unless it carries a manager or polling
-      -- right; then only the owned flags are cleared.
-      WITH "unwanted" AS (
-        SELECT "privilege"."unit_id", "privilege"."member_id",
-          "privilege"."admin_manager" OR "privilege"."unit_manager" OR "privilege"."area_manager" OR
-          "privilege"."member_manager" OR "privilege"."polling_right" AS "keep"
-        FROM public.privilege
-        JOIN public.member ON "member"."id" = "privilege"."member_id"
-        WHERE public.member_sync_owned("member"."identification")
-        AND ("member"."identification" = ANY ("listed_v") OR "member"."admin")
-        AND "privilege"."unit_id" = ANY ("managed_v")
-        AND ("privilege"."voting_right" OR "privilege"."initiative_right" OR NOT (
-          "privilege"."admin_manager" OR "privilege"."unit_manager" OR "privilege"."area_manager" OR
-          "privilege"."member_manager" OR "privilege"."polling_right"))
-        AND ("privilege"."member_id", "privilege"."unit_id") NOT IN (
-          SELECT * FROM unnest("want_member_v", "want_unit_v"))
-      ), "deleted" AS (
-        DELETE FROM public.privilege USING "unwanted"
-        WHERE "privilege"."unit_id" = "unwanted"."unit_id"
-        AND "privilege"."member_id" = "unwanted"."member_id"
-        AND NOT "unwanted"."keep"
-        RETURNING 1
-      ), "cleared" AS (
-        UPDATE public.privilege SET "voting_right" = FALSE, "initiative_right" = FALSE
-        FROM "unwanted"
-        WHERE "privilege"."unit_id" = "unwanted"."unit_id"
-        AND "privilege"."member_id" = "unwanted"."member_id"
-        AND "unwanted"."keep"
-        RETURNING 1
-      )
-      SELECT (SELECT count(*) FROM "deleted") + (SELECT count(*) FROM "cleared")
-        INTO "privileges_revoked";
-      -- Departed (not listed, not admin): deleted when nothing that matters
-      -- references the row (ON DELETE CASCADE would silently drop initiators,
-      -- incoming delegations, support and issue comments), otherwise
-      -- anonymised.
-      "deleted" := 0;
-      "anonymised" := 0;
-      FOR "member_id_v" IN
-        SELECT "id" FROM public.member
-        WHERE public.member_sync_owned("identification")
-        AND NOT "identification" = ANY ("listed_v")
-        AND NOT "admin"
-        ORDER BY "id"
-        FOR UPDATE
-      LOOP
-        "anonymise_v" := (
-          EXISTS (SELECT NULL FROM public.initiator  WHERE "member_id"  = "member_id_v") OR
-          EXISTS (SELECT NULL FROM public.delegation WHERE "trustee_id" = "member_id_v") OR
-          EXISTS (SELECT NULL FROM public.interest   WHERE "member_id"  = "member_id_v") OR
-          EXISTS (SELECT NULL FROM public.supporter  WHERE "member_id"  = "member_id_v") OR
-          EXISTS (SELECT NULL FROM public.opinion    WHERE "member_id"  = "member_id_v") OR
-          EXISTS (SELECT NULL FROM public.direct_voter WHERE "member_id" = "member_id_v") OR
-          EXISTS (SELECT NULL FROM public.issue_comment WHERE "member_id" = "member_id_v") OR
-          EXISTS (SELECT NULL FROM public.suggestion WHERE "author_id"  = "member_id_v") OR
-          EXISTS (SELECT NULL FROM public.argument   WHERE "author_id"  = "member_id_v")
-        );
-        IF NOT "anonymise_v" THEN
-          BEGIN
-            -- Deferred triggers fire here, inside the block, not at COMMIT.
-            -- After a successful DELETE the mode stays IMMEDIATE for the rest
-            -- of the transaction (after a failed one it is rolled back with
-            -- the block); the later statements do not rely on deferral.
-            SET CONSTRAINTS ALL IMMEDIATE;
-            DELETE FROM public.member WHERE "id" = "member_id_v";
-            "deleted" := "deleted" + 1;
-          -- A reference (RESTRICT/NO ACTION) or a trigger refusing it; any
-          -- other error (deadlock, lock timeout, ...) fails the run.
-          EXCEPTION WHEN integrity_constraint_violation OR raise_exception THEN
-            "anonymise_v" := TRUE;
-          END;
+      -- The removals, in a block: with removals off (member-sync.php, setting
+      -- "removals") they run for their counts only and are rolled back with
+      -- the block at the end (the variables keep the counts), so nothing is
+      -- locked, revoked, deleted or anonymised and no "locked" mail queued.
+      BEGIN
+        -- Listed and not eligible, or a departed admin: locked, reconciled on
+        -- every run; the "locked" mail on the transition only.
+        WITH "locked" AS (
+          UPDATE public.member SET "locked" = TRUE
+          WHERE public.member_sync_owned("identification")
+          AND NOT "identification" = ANY ("eligible_v")
+          AND ("identification" = ANY ("listed_v") OR "admin")
+          AND NOT "locked"
+          RETURNING "id"
+        ), "queued" AS (
+          INSERT INTO public.member_sync_mail ("member_id", "kind")
+          SELECT "id", 'locked' FROM "locked"
+          ON CONFLICT ("member_id") DO UPDATE SET "kind" = EXCLUDED."kind", "created" = EXCLUDED."created"
+        )
+        SELECT count(*) INTO "locked" FROM "locked";
+        DELETE FROM public.session USING public.member
+          WHERE "session"."member_id" = "member"."id"
+          AND public.member_sync_owned("member"."identification")
+          AND NOT "member"."identification" = ANY ("eligible_v")
+          AND ("member"."identification" = ANY ("listed_v") OR "member"."admin");
+        -- Unwanted: the row is deleted, unless it carries a manager or polling
+        -- right; then only the owned flags are cleared.
+        WITH "unwanted" AS (
+          SELECT "privilege"."unit_id", "privilege"."member_id",
+            "privilege"."admin_manager" OR "privilege"."unit_manager" OR "privilege"."area_manager" OR
+            "privilege"."member_manager" OR "privilege"."polling_right" AS "keep"
+          FROM public.privilege
+          JOIN public.member ON "member"."id" = "privilege"."member_id"
+          WHERE public.member_sync_owned("member"."identification")
+          AND ("member"."identification" = ANY ("listed_v") OR "member"."admin")
+          AND "privilege"."unit_id" = ANY ("managed_v")
+          AND ("privilege"."voting_right" OR "privilege"."initiative_right" OR NOT (
+            "privilege"."admin_manager" OR "privilege"."unit_manager" OR "privilege"."area_manager" OR
+            "privilege"."member_manager" OR "privilege"."polling_right"))
+          AND ("privilege"."member_id", "privilege"."unit_id") NOT IN (
+            SELECT * FROM unnest("want_member_v", "want_unit_v"))
+        ), "deleted" AS (
+          DELETE FROM public.privilege USING "unwanted"
+          WHERE "privilege"."unit_id" = "unwanted"."unit_id"
+          AND "privilege"."member_id" = "unwanted"."member_id"
+          AND NOT "unwanted"."keep"
+          RETURNING 1
+        ), "cleared" AS (
+          UPDATE public.privilege SET "voting_right" = FALSE, "initiative_right" = FALSE
+          FROM "unwanted"
+          WHERE "privilege"."unit_id" = "unwanted"."unit_id"
+          AND "privilege"."member_id" = "unwanted"."member_id"
+          AND "unwanted"."keep"
+          RETURNING 1
+        )
+        SELECT (SELECT count(*) FROM "deleted") + (SELECT count(*) FROM "cleared")
+          INTO "privileges_revoked";
+        -- Departed (not listed, not admin): deleted when nothing that matters
+        -- references the row (ON DELETE CASCADE would silently drop initiators,
+        -- incoming delegations, interest, support, opinions and issue
+        -- comments), otherwise anonymised; the RESTRICT references (votes,
+        -- drafts, suggestions, arguments, ...) make the DELETE fail into the
+        -- anonymisation.
+        "deleted" := 0;
+        "anonymised" := 0;
+        FOR "member_id_v" IN
+          SELECT "id" FROM public.member
+          WHERE public.member_sync_owned("identification")
+          AND NOT "identification" = ANY ("listed_v")
+          AND NOT "admin"
+          ORDER BY "id"
+          FOR UPDATE
+        LOOP
+          "anonymise_v" := (
+            EXISTS (SELECT NULL FROM public.initiator  WHERE "member_id"  = "member_id_v") OR
+            EXISTS (SELECT NULL FROM public.delegation WHERE "trustee_id" = "member_id_v") OR
+            EXISTS (SELECT NULL FROM public.interest   WHERE "member_id"  = "member_id_v") OR
+            EXISTS (SELECT NULL FROM public.supporter  WHERE "member_id"  = "member_id_v") OR
+            EXISTS (SELECT NULL FROM public.opinion    WHERE "member_id"  = "member_id_v") OR
+            EXISTS (SELECT NULL FROM public.issue_comment WHERE "member_id" = "member_id_v")
+          );
+          IF NOT "anonymise_v" THEN
+            BEGIN
+              -- Deferred triggers fire here, inside the block, not at COMMIT.
+              -- The mode is rolled back with the block (or, with removals off,
+              -- the outer one); otherwise it stays IMMEDIATE, and the later
+              -- statements do not rely on deferral.
+              SET CONSTRAINTS ALL IMMEDIATE;
+              DELETE FROM public.member WHERE "id" = "member_id_v";
+              "deleted" := "deleted" + 1;
+            -- A reference (RESTRICT/NO ACTION) or a trigger refusing it; any
+            -- other error (deadlock, lock timeout, ...) fails the run.
+            EXCEPTION WHEN integrity_constraint_violation OR raise_exception THEN
+              "anonymise_v" := TRUE;
+            END;
+          END IF;
+          IF "anonymise_v" THEN
+            PERFORM public.delete_member("member_id_v");
+            DELETE FROM public.privilege WHERE "member_id" = "member_id_v";
+            DELETE FROM public.member_sync_mail WHERE "member_id" = "member_id_v";
+            UPDATE public.member SET
+              "invite_code"        = NULL,
+              "invite_code_expiry" = NULL,
+              "identification"     = NULL,
+              "admin_comment"      = 'Austritt',
+              "locked"             = TRUE
+              WHERE "id" = "member_id_v";
+            "anonymised" := "anonymised" + 1;
+          END IF;
+        END LOOP;
+        IF NOT "removals_p" THEN
+          RAISE EXCEPTION 'member_sync: removals off' USING ERRCODE = 'MSOFF';
         END IF;
-        IF "anonymise_v" THEN
-          PERFORM public.delete_member("member_id_v");
-          DELETE FROM public.privilege WHERE "member_id" = "member_id_v";
-          DELETE FROM public.member_sync_mail WHERE "member_id" = "member_id_v";
-          UPDATE public.member SET
-            "invite_code"        = NULL,
-            "invite_code_expiry" = NULL,
-            "identification"     = NULL,
-            "admin_comment"      = 'Austritt',
-            "locked"             = TRUE
-            WHERE "id" = "member_id_v";
-          "anonymised" := "anonymised" + 1;
-        END IF;
-      END LOOP;
+      EXCEPTION WHEN SQLSTATE 'MSOFF' THEN
+        NULL;
+      END;
       RETURN NEXT;
     END;
   $$;
 
-COMMENT ON FUNCTION public.member_sync(JSONB) IS 'Applies the member list [{"identification", "lo", "eligible", "email", "regions"}, ...] of member-sync.php (README, "Member sync") to the rows with an identification ''mv:<pseudonym>''; returns the counts';
+COMMENT ON FUNCTION public.member_sync(JSONB, BOOLEAN) IS 'Applies the member list [{"identification", "lo", "eligible", "email", "regions"}, ...] of member-sync.php (README, "Member sync") to the rows with an identification ''mv:<pseudonym>''; with removals FALSE only the additions (the removals counted, not done); returns the counts';
 
-REVOKE ALL ON FUNCTION public.member_sync(JSONB) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.member_sync(JSONB, BOOLEAN) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.member_sync_units() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.member_sync_owned(TEXT) FROM PUBLIC;
-REVOKE ALL ON TABLE public.member_sync_mail, public.member_sync_mail_due, public.member_sync_mail_stale FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.member_sync(JSONB) TO lqfb_membersync;
+REVOKE ALL ON TABLE public.member_sync_mail, public.member_sync_mail_due FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.member_sync(JSONB, BOOLEAN) TO lqfb_membersync;
 
 COMMIT;

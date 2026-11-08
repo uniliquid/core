@@ -1,18 +1,16 @@
 -- The mail worker of the member sync, run by lf_member_sync_mail in the
 -- frontend's WebMCP shell (README, "Member sync"). One pass over the queue
--- of member_sync.sql:
--- - rows that no longer fit their member's state (view
---   member_sync_mail_stale) are deleted unsent, unless replaced meanwhile;
--- - each due row (view member_sync_mail_due), in its own transaction:
---   the member row is locked (FOR UPDATE, before the queue row, in the order
---   the sync locks them, so a sync run waits for this mail) and the queue
---   row (FOR UPDATE); if the row was replaced or no longer fits, it is
---   skipped. "invite" goes through the frontend's
---   Member:send_invitation(), "locked" and "unlocked" with the texts
---   member_sync_locked.txt and member_sync_unlocked.txt through
---   net.send_mail; after a successful send the row is deleted and the
---   transaction committed, otherwise rolled back (a new invite code too),
---   so the next pass retries it.
+-- of member_sync.sql, each row in its own transaction: the member row is
+-- locked (FOR UPDATE, before the queue row, in the order the sync locks
+-- them, so a sync run waits for this mail) and the queue row (FOR UPDATE);
+-- a row that is not due (view member_sync_mail_due: its state no longer
+-- fits) is deleted unsent, by its whole key (kind and time too, so a row
+-- the sync replaced meanwhile stays for the next pass). "invite" goes
+-- through the frontend's Member:send_invitation(), "locked" and "unlocked"
+-- with the texts member_sync_locked.txt and member_sync_unlocked.txt
+-- through net.send_mail; after a successful send the row is deleted and
+-- the transaction committed, otherwise rolled back (a new invite code too),
+-- so the next pass retries it.
 -- Prints "<n> sent, <n> failed"; exits with status 1 if any send failed or
 -- on any error.
 
@@ -30,10 +28,7 @@ end
 
 local sent, failed = 0, 0
 local ok, err = pcall(function()
-  -- The whole key: a row the sync replaces meanwhile (new kind or time,
-  -- checked again after the row lock) is not deleted.
-  db:query("DELETE FROM member_sync_mail USING member_sync_mail_stale AS stale WHERE member_sync_mail.member_id = stale.member_id AND member_sync_mail.kind = stale.kind AND member_sync_mail.created = stale.created")
-  local rows = db:query("SELECT member_id, kind, created::text AS created FROM member_sync_mail_due ORDER BY member_id")
+  local rows = db:query("SELECT member_id, kind, created::text AS created FROM member_sync_mail ORDER BY member_id")
   for i, row in ipairs(rows) do
     local key = { row.member_id, row.kind, row.created }
     db:query("BEGIN")
@@ -57,15 +52,15 @@ local ok, err = pcall(function()
         content       = text(row.kind)
       }
     end)
-    if send_ok and success and success ~= "skipped" then
+    if send_ok and success then
       db:query{ "DELETE FROM member_sync_mail WHERE member_id = ? AND kind = ? AND created = ?::timestamptz", unpack(key) }
       db:query("COMMIT")
-      sent = sent + 1
+      if success ~= "skipped" then
+        sent = sent + 1
+      end
     else
       db:query("ROLLBACK")
-      if not (send_ok and success == "skipped") then
-        failed = failed + 1
-      end
+      failed = failed + 1
     end
   end
 end)
