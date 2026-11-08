@@ -236,9 +236,12 @@ check('units: region dropped -> removed', units($owner, id_of($owner, mv(4))) ==
 // Unlock.
 $db = synced_database();
 $owner = connect($db);
-$activeId = active_member($owner, mv(1), ['locked' => true, 'invite_code' => 'CODE1']);
-$inactiveId = active_member($owner, mv(2), ['locked' => true, 'active' => false, 'notify_email' => 'member2@example.org']);
-$neverId = member($owner, ['identification' => mv(3), 'locked' => true, 'notify_email' => 'member3@example.org']);
+$activeId = active_member($owner, mv(1), ['locked' => true, 'invite_code' => 'CODE1',
+    'password_reset_secret' => 'RESET1', 'password_reset_secret_expiry' => '2000-01-01']);
+$inactiveId = active_member($owner, mv(2), ['locked' => true, 'active' => false, 'notify_email' => 'member2@example.org',
+    'password_reset_secret' => 'RESET2', 'password_reset_secret_expiry' => '2100-01-01']);
+$neverId = member($owner, ['identification' => mv(3), 'locked' => true, 'notify_email' => 'member3@example.org',
+    'password_reset_secret' => 'RESET3']);
 $codeId = member($owner, ['identification' => mv(4), 'locked' => true, 'notify_email' => 'member4@example.org', 'invite_code' => 'CODE4']);
 $owner->exec("UPDATE member SET notify_email = 'member1@example.org' WHERE id = $activeId");
 $result = sync($db, [entry(1), entry(2), entry(3), entry(4)]);
@@ -253,6 +256,10 @@ check('unlock: activated + active -> "unlocked" mail, invite_code unchanged', qu
 check('unlock: activated, not active -> "unlocked" mail', queued($owner, $inactiveId) === 'unlocked');
 check('unlock: never activated, no invite code -> invite', queued($owner, $neverId) === 'invite');
 check('unlock: never activated, with an invite code -> no mail', queued($owner, $codeId) === null);
+$reset = fn ($id) => array_values(row($owner, 'SELECT password_reset_secret, password_reset_secret_expiry FROM member WHERE id = ?', [$id]));
+check('unlock: expired password reset cleared', $reset($activeId) === [null, null]);
+check('unlock: password reset without expiry cleared', $reset($neverId) === [null, null]);
+check('unlock: unexpired password reset kept', $reset($inactiveId) === ['RESET2', '2100-01-01 00:00:00+00']);
 
 // Lock.
 $db = synced_database();
@@ -281,7 +288,8 @@ check('lock: change lines', $GLOBALS['changes'] === ["member $id: locked", "memb
 $locked = row($owner, 'SELECT * FROM member WHERE id = ?', [$id]);
 check('lock: locked, sessions and privileges gone', $locked['locked'] === true && privileges($owner, $id) === []
     && (int) $owner->query("SELECT count(*) FROM session WHERE member_id = $id")->fetchColumn() === 0);
-check('lock: profile and email kept', $locked['name'] !== null && $locked['notify_email'] === 'member1@example.org' && $locked['active'] === true);
+check('lock: profile and email kept', $locked['name'] !== null && $locked['notify_email'] === 'member1@example.org');
+check('lock: deactivated (LQFB counts active members)', $locked['active'] === false);
 check('lock: "locked" mail replaces the pending "unlocked" one (one row)', queued($owner, $id) === 'locked');
 check('lock: "locked" mail due', column($owner, 'SELECT kind FROM member_sync_mail_due WHERE member_id = ?', [$id]) === ['locked']);
 check('lock: second run, no changes', sync($db, [entry(1, false, 38), entry(2)]) === counts());
@@ -627,7 +635,13 @@ check('another key: one match is enough', is_array(sync($db, [$otherKey(1), entr
 
 // --- Voting: what the lock means for ballots (core.sql, close_voting) -----------
 
-foreach ([false => 'ballot dropped at close without the privilege', true => 'ballot counts when restored before the close'] as $restored => $name) {
+// The lock also deactivates; close_voting counts active members only, so a
+// restored ballot counts only after a login (login.lua sets active again).
+foreach ([
+    'ballot dropped at close without the privilege' => [false, false, 0],
+    'ballot dropped when restored without a login' => [true, false, 0],
+    'ballot counts when restored and logged in before the close' => [true, true, 1],
+] as $name => [$restored, $login, $expected]) {
     $db = synced_database();
     $owner = connect($db);
     $authorId = active_member($owner, null);
@@ -642,11 +656,14 @@ foreach ([false => 'ballot dropped at close without the privilege', true => 'bal
     if ($restored) {
         sync($db, [entry(1)]);
     }
+    if ($login) {
+        $owner->exec("UPDATE member SET active = TRUE, last_activity = now() WHERE id = $voterId");
+    }
     $owner->exec('BEGIN ISOLATION LEVEL REPEATABLE READ');
     $owner->exec("SELECT close_voting($issue)");
     $owner->exec('COMMIT');
     $voters = (int) $owner->query("SELECT count(*) FROM direct_voter WHERE issue_id = $issue AND member_id = $voterId")->fetchColumn();
-    check("voting: $name", $voters === ($restored ? 1 : 0));
+    check("voting: $name", $voters === $expected);
 }
 
 done();
