@@ -5,9 +5,11 @@
 //   php member-sync.php [--dry-run] [--secrets=<file>]
 // Fetches the Admidio add-ons' member list for Liquid (JSON [{"id": int,
 // "lo": int|null, "eligible": bool, "email": string|null, "regions":
-// [string, ...]}, ...]) and applies it with public.member_sync()
-// (member_sync.sql), which validates the whole list and writes it in one
-// transaction (README, "Member sync"). A session advisory lock serialises
+// [string, ...]}, ...]), replaces each id by its pseudonym ("identification":
+// 'mv:' and the lowercase hex HMAC-SHA256 of the id with the key of the
+// secrets file; the Liquid database never sees Admidio user ids) and applies
+// it with public.member_sync() (member_sync.sql), which validates the whole
+// list and writes it in one transaction (README, "Member sync"). A session advisory lock serialises
 // the runs from before the fetch: a run that finds it taken fails. Prints a
 // summary (counts only: the journal gets no personal data); exit status 0
 // on success, 1 (and a message on stderr) otherwise; nothing is written
@@ -18,6 +20,7 @@
 // variable MEMBER_SYNC_SECRETS) returns an array:
 // ['url' => 'https://<Admidio internal address>:<port>/liquid-members.php',
 //  'token' => '<hex>', 'cafile' => '<Admidio certificate>',
+//  'pseudonym_key' => '<hex, at least 32 random bytes>',
 //  'dsn' => 'pgsql:dbname=<database>', 'user' => 'lqfb_membersync'].
 // No password: peer authentication.
 
@@ -32,7 +35,8 @@ class MemberSyncError extends Exception
 
 // The secrets from $file; throws unless the URL is https without control
 // characters or spaces, the token is 64 lowercase hex digits (as the
-// add-ons' tokens) and the cafile exists.
+// add-ons' tokens), the cafile exists and the pseudonym key is at least 64
+// lowercase hex digits (32 bytes), whole bytes.
 function member_sync_secrets($file)
 {
     if (!is_string($file) || $file === '' || !is_file($file)) {
@@ -57,6 +61,9 @@ function member_sync_secrets($file)
     }
     if (!is_string($secrets['cafile'] ?? null) || !is_file($secrets['cafile'])) {
         throw new MemberSyncError('no cafile');
+    }
+    if (!is_string($secrets['pseudonym_key'] ?? null) || !preg_match('/^(?:[0-9a-f]{2}){32,}$/D', $secrets['pseudonym_key'])) {
+        throw new MemberSyncError('the pseudonym key must be at least 64 lowercase hex digits (an even number)');
     }
     return $secrets;
 }
@@ -139,9 +146,10 @@ function member_sync_fetch($secrets, $timeout = MEMBER_SYNC_TIMEOUT)
     return $body;
 }
 
-// The member list of $body as JSON for public.member_sync(), or null unless
-// it is a non-empty JSON list of objects. A light check only: the function
-// validates every entry (README, "Member sync").
+// The member list of $body (a list of objects), or null unless it is a
+// non-empty JSON list of objects, each with an "id" integer from 1 to
+// 2147483647 and no "identification". A light check only: public.member_sync() validates the other
+// fields (README, "Member sync").
 function member_sync_parse($body)
 {
     try {
@@ -153,11 +161,33 @@ function member_sync_parse($body)
         return null;
     }
     foreach ($members as $member) {
-        if (!$member instanceof stdClass) {
+        if (!$member instanceof stdClass || !is_int($member->id ?? null) || $member->id < 1 || $member->id > 2147483647
+            || property_exists($member, 'identification')) {
             return null;
         }
     }
-    return json_encode($members, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    return $members;
+}
+
+// The pseudonym of the Admidio user id $id: 'mv:' and the lowercase hex
+// HMAC-SHA256 of its decimal digits with $key (raw bytes).
+function member_sync_pseudonym($key, $id)
+{
+    return 'mv:' . hash_hmac('sha256', (string) $id, $key);
+}
+
+// $members (of member_sync_parse()) as JSON for public.member_sync(), each
+// "id" replaced by "identification", its pseudonym.
+function member_sync_pseudonymise($members, $key)
+{
+    $entries = [];
+    foreach ($members as $member) {
+        $entry = get_object_vars($member);
+        $entry['identification'] = member_sync_pseudonym($key, $entry['id']);
+        unset($entry['id']);
+        $entries[] = $entry;
+    }
+    return json_encode($entries, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 }
 
 // Applies $members (JSON) with public.member_sync() in one transaction
@@ -247,7 +277,7 @@ function member_sync_main($argv, $env)
             throw new MemberSyncError('invalid document');
         }
         try {
-            member_sync_apply($pdo, $members, $dryRun);
+            member_sync_apply($pdo, member_sync_pseudonymise($members, hex2bin($secrets['pseudonym_key'])), $dryRun);
         } catch (PDOException $e) {
             throw new MemberSyncError(member_sync_database_error($e) . '; rolled back, nothing written');
         }

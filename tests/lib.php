@@ -10,6 +10,8 @@ const SOCKET = '/var/run/postgresql';
 const LO_MAP = '{"37": 2, "38": 6, "39": 4, "40": 10, "41": 5, "42": 7, "43": 3, "44": 8, "45": 9}';
 const REGION_MAP = '{"AT130": 2, "AT221": 11}';
 const MANAGED_UNITS = '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]';
+// A made-up pseudonym key (secrets file, hex).
+const PSEUDONYM_KEY = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';
 
 $failures = 0;
 
@@ -88,6 +90,13 @@ function synced_database()
     return database($template);
 }
 
+// The pseudonym of the Admidio user id $id with PSEUDONYM_KEY, as
+// member-sync.php computes it.
+function mv($id)
+{
+    return 'mv:' . hash_hmac('sha256', (string) $id, hex2bin(PSEUDONYM_KEY));
+}
+
 // A member list entry as the Admidio side sends it.
 function entry($id, $eligible = true, $lo = null, $regions = [], $email = 'default')
 {
@@ -97,9 +106,20 @@ function entry($id, $eligible = true, $lo = null, $regions = [], $email = 'defau
 
 // Runs public.member_sync($members) as lqfb_membersync in its own
 // transaction (after the statement $setup, if any); the counts, or the
-// SQLSTATE of the error. $members is encoded as JSON unless it is a string.
+// SQLSTATE of the error. $members is encoded as JSON unless it is a string,
+// with each "id" replaced by "identification" => mv(id) as member-sync.php
+// does (unless the entry has an identification).
 function sync($db, $members, $setup = null)
 {
+    if (!is_string($members)) {
+        $members = array_map(function ($entry) {
+            if (is_array($entry) && array_key_exists('id', $entry)) {
+                $entry += ['identification' => mv($entry['id'])];
+                unset($entry['id']);
+            }
+            return $entry;
+        }, $members);
+    }
     $pdo = connect($db, 'lqfb_membersync');
     if ($setup !== null) {
         $pdo->exec($setup);

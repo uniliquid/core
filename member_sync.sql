@@ -16,13 +16,14 @@
 --   public.member_sync_units()     the maps, baked in at apply time.
 --   public.member_sync_owned(text) the ownership predicate: the sync only
 --                                  ever touches rows whose identification
---                                  is 'mv:<Admidio user id>'.
+--                                  is 'mv:<pseudonym>' (64 lowercase hex
+--                                  digits, computed by member-sync.php).
 --   public.member_sync_mail        the mail queue for lf_member_sync_mail
---                                  (one pending mail per member).
+--                                  (one pending mail per member: member id,
+--                                  kind, time; deleted once sent, so an
+--                                  lf_export dump holds the unsent ones).
 --   public.member_sync_mail_due    queued mails whose state still fits.
 --   public.member_sync_mail_stale  the other queue rows (dropped unsent).
--- Replaces delete_private_data() and the member search trigger by the
--- versions of core.sql (identification neither exported nor searchable).
 --
 -- The role lqfb_membersync must exist (created by the deployment).
 
@@ -114,7 +115,7 @@ $$;
 CREATE OR REPLACE FUNCTION public.member_sync_owned("identification_p" TEXT)
   RETURNS BOOLEAN
   LANGUAGE sql IMMUTABLE
-  AS $$ SELECT "identification_p" OPERATOR(pg_catalog.~) '^mv:[1-9][0-9]*$' $$;
+  AS $$ SELECT "identification_p" OPERATOR(pg_catalog.~) '^mv:[0-9a-f]{64}$' $$;
 
 CREATE TABLE IF NOT EXISTS public.member_sync_mail (
         "member_id"             INT4            PRIMARY KEY REFERENCES public.member ("id") ON DELETE CASCADE ON UPDATE CASCADE,
@@ -190,17 +191,16 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
         IF
           jsonb_typeof("entry_v") <> 'object' OR
           ARRAY(SELECT "key" FROM jsonb_object_keys("entry_v") AS "key" ORDER BY "key" COLLATE "C")
-            <> ARRAY['eligible', 'email', 'id', 'lo', 'regions']
+            <> ARRAY['eligible', 'email', 'identification', 'lo', 'regions']
         THEN
-          RAISE EXCEPTION 'member_sync: entry %: not an object with exactly id, lo, eligible, email, regions', "position_v"
+          RAISE EXCEPTION 'member_sync: entry %: not an object with exactly identification, lo, eligible, email, regions', "position_v"
             USING ERRCODE = 'invalid_parameter_value';
         END IF;
         IF
-          jsonb_typeof("entry_v"->'id') <> 'number' OR
-          ("entry_v"->>'id') !~ '^[1-9][0-9]{0,9}$' OR
-          ("entry_v"->>'id')::int8 > 2147483647
+          jsonb_typeof("entry_v"->'identification') <> 'string' OR
+          NOT public.member_sync_owned("entry_v"->>'identification')
         THEN
-          RAISE EXCEPTION 'member_sync: entry %: bad id', "position_v"
+          RAISE EXCEPTION 'member_sync: entry %: bad identification', "position_v"
             USING ERRCODE = 'invalid_parameter_value';
         END IF;
         IF NOT (
@@ -240,13 +240,22 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
         END IF;
       END LOOP;
       SELECT
-        array_agg('mv:' || "id"),
-        coalesce(array_agg('mv:' || "id") FILTER (WHERE "eligible"), '{}'),
-        count(DISTINCT "id")
+        array_agg("identification"),
+        coalesce(array_agg("identification") FILTER (WHERE "eligible"), '{}'),
+        count(DISTINCT "identification")
         INTO "listed_v", "eligible_v", "count_v"
-        FROM jsonb_to_recordset("members_p") AS "entry" ("id" INT4, "eligible" BOOLEAN);
+        FROM jsonb_to_recordset("members_p") AS "entry" ("identification" TEXT, "eligible" BOOLEAN);
       IF "count_v" <> cardinality("listed_v") THEN
-        RAISE EXCEPTION 'member_sync: duplicate id'
+        RAISE EXCEPTION 'member_sync: duplicate identification'
+          USING ERRCODE = 'invalid_parameter_value';
+      END IF;
+      -- A list that matches none of the owned rows (e.g. pseudonyms made
+      -- with another key) would delete or anonymise them all.
+      IF
+        EXISTS (SELECT NULL FROM public.member WHERE public.member_sync_owned("identification")) AND
+        NOT EXISTS (SELECT NULL FROM public.member WHERE "identification" = ANY ("listed_v"))
+      THEN
+        RAISE EXCEPTION 'member_sync: no listed member has a row (another key?)'
           USING ERRCODE = 'invalid_parameter_value';
       END IF;
       SELECT array_agg("unit"::text::int4) INTO "managed_v"
@@ -254,10 +263,10 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
       -- Eligible without a row: a new account (with an address) and an invite.
       WITH "new" AS (
         INSERT INTO public.member ("identification", "notify_email")
-        SELECT 'mv:' || "entry"."id", "entry"."email"
-        FROM jsonb_to_recordset("members_p") AS "entry" ("id" INT4, "eligible" BOOLEAN, "email" TEXT)
+        SELECT "entry"."identification", "entry"."email"
+        FROM jsonb_to_recordset("members_p") AS "entry" ("identification" TEXT, "eligible" BOOLEAN, "email" TEXT)
         WHERE "entry"."eligible" AND "entry"."email" NOTNULL
-        AND NOT EXISTS (SELECT NULL FROM public.member WHERE "identification" = 'mv:' || "entry"."id")
+        AND NOT EXISTS (SELECT NULL FROM public.member WHERE "identification" = "entry"."identification")
         RETURNING "id"
       ), "queued" AS (
         INSERT INTO public.member_sync_mail ("member_id", "kind")
@@ -265,9 +274,9 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
       )
       SELECT count(*) INTO "created" FROM "new";
       SELECT count(*) INTO "no_email"
-        FROM jsonb_to_recordset("members_p") AS "entry" ("id" INT4, "eligible" BOOLEAN, "email" TEXT)
+        FROM jsonb_to_recordset("members_p") AS "entry" ("identification" TEXT, "eligible" BOOLEAN, "email" TEXT)
         WHERE "entry"."eligible" AND "entry"."email" ISNULL
-        AND NOT EXISTS (SELECT NULL FROM public.member WHERE "identification" = 'mv:' || "entry"."id");
+        AND NOT EXISTS (SELECT NULL FROM public.member WHERE "identification" = "entry"."identification");
       -- Eligible and locked: unlock; the "unlocked" mail for activated active
       -- members, the invite again for never activated ones without a code.
       WITH "unlocked" AS (
@@ -297,9 +306,9 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
           "notify_email_secret_expiry"   = NULL,
           "password_reset_secret"        = NULL,
           "password_reset_secret_expiry" = NULL
-        FROM jsonb_to_recordset("members_p") AS "entry" ("id" INT4, "eligible" BOOLEAN, "email" TEXT)
+        FROM jsonb_to_recordset("members_p") AS "entry" ("identification" TEXT, "eligible" BOOLEAN, "email" TEXT)
         WHERE public.member_sync_owned("member"."identification")
-        AND "member"."identification" = 'mv:' || "entry"."id"
+        AND "member"."identification" = "entry"."identification"
         AND "entry"."eligible" AND "entry"."email" NOTNULL
         AND NOT "member"."active"
         AND "member"."notify_email" IS DISTINCT FROM "entry"."email"
@@ -335,8 +344,8 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
       -- managed units of listed members and admins.
       SELECT array_agg("member"."id"), array_agg("unit"."id")
         INTO "want_member_v", "want_unit_v"
-        FROM jsonb_to_recordset("members_p") AS "entry" ("id" INT4, "lo" INT4, "eligible" BOOLEAN, "regions" JSONB)
-        JOIN public.member ON "member"."identification" = 'mv:' || "entry"."id"
+        FROM jsonb_to_recordset("members_p") AS "entry" ("identification" TEXT, "lo" INT4, "eligible" BOOLEAN, "regions" JSONB)
+        JOIN public.member ON "member"."identification" = "entry"."identification"
         CROSS JOIN LATERAL (
           SELECT 1
           UNION SELECT ("units_v"->'lo'->>"entry"."lo"::text)::int4 WHERE "entry"."lo" NOTNULL
@@ -440,97 +449,12 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB)
     END;
   $$;
 
-COMMENT ON FUNCTION public.member_sync(JSONB) IS 'Applies the Admidio member list [{"id", "lo", "eligible", "email", "regions"}, ...] (README, "Member sync") to the rows with identification ''mv:<id>''; returns the counts';
+COMMENT ON FUNCTION public.member_sync(JSONB) IS 'Applies the member list [{"identification", "lo", "eligible", "email", "regions"}, ...] of member-sync.php (README, "Member sync") to the rows with an identification ''mv:<pseudonym>''; returns the counts';
 
 REVOKE ALL ON FUNCTION public.member_sync(JSONB) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.member_sync_units() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.member_sync_owned(TEXT) FROM PUBLIC;
 REVOKE ALL ON TABLE public.member_sync_mail, public.member_sync_mail_due, public.member_sync_mail_stale FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.member_sync(JSONB) TO lqfb_membersync;
-
--- core.sql: the identification is not searchable. An existing database gets
--- the trigger without it, and its search data refreshed, once.
-DO $$
-  BEGIN
-    IF EXISTS (
-      SELECT NULL FROM pg_catalog.pg_trigger
-      WHERE "tgrelid" = 'public.member'::regclass
-      AND "tgname" = 'update_text_search_data'
-      AND pg_catalog.pg_get_triggerdef("oid") LIKE '%identification%'
-    ) THEN
-      DROP TRIGGER "update_text_search_data" ON public.member;
-      CREATE TRIGGER "update_text_search_data"
-        BEFORE INSERT OR UPDATE ON "member"
-        FOR EACH ROW EXECUTE PROCEDURE
-        tsvector_update_trigger('text_search_data', 'pg_catalog.simple',
-          "name", "organizational_unit", "internal_posts",
-          "realname", "external_memberships", "external_posts", "statement" );
-      UPDATE public.member SET "text_search_data" = NULL
-        WHERE "identification" NOTNULL;
-    END IF;
-  END;
-$$;
-
--- core.sql: the export clears the identification and the mail queue.
-CREATE OR REPLACE FUNCTION public."delete_private_data"()
-  RETURNS VOID
-  LANGUAGE 'plpgsql' VOLATILE AS $$
-    BEGIN
-      UPDATE "member" SET
-        "invite_code"                  = NULL,
-        "invite_code_expiry"           = NULL,
-        "admin_comment"                = NULL,
-        "last_login"                   = NULL,
-        "login"                        = NULL,
-        "password"                     = NULL,
-        "lang"                         = NULL,
-        "notify_email"                 = NULL,
-        "notify_email_unconfirmed"     = NULL,
-        "notify_email_secret"          = NULL,
-        "notify_email_secret_expiry"   = NULL,
-        "notify_email_lock_expiry"     = NULL,
-        "notify_level"                 = NULL,
-        "password_reset_secret"        = NULL,
-        "password_reset_secret_expiry" = NULL,
-        "identification"               = NULL,
-        "organizational_unit"          = NULL,
-        "internal_posts"               = NULL,
-        "realname"                     = NULL,
-        "birthday"                     = NULL,
-        "address"                      = NULL,
-        "email"                        = NULL,
-        "xmpp_address"                 = NULL,
-        "website"                      = NULL,
-        "phone"                        = NULL,
-        "mobile_phone"                 = NULL,
-        "profession"                   = NULL,
-        "external_memberships"         = NULL,
-        "external_posts"               = NULL,
-        "formatting_engine"            = NULL,
-        "statement"                    = NULL;
-      -- "text_search_data" is updated by triggers
-      DELETE FROM "setting";
-      DELETE FROM "setting_map";
-      DELETE FROM "member_relation_setting";
-      DELETE FROM "member_image";
-      DELETE FROM "contact";
-      DELETE FROM "ignored_member";
-      DELETE FROM "session";
-      DELETE FROM "area_setting";
-      DELETE FROM "issue_setting";
-      DELETE FROM "ignored_initiative";
-      DELETE FROM "initiative_setting";
-      DELETE FROM "suggestion_setting";
-      DELETE FROM "non_voter";
-      DELETE FROM "direct_voter" USING "issue"
-        WHERE "direct_voter"."issue_id" = "issue"."id"
-        AND "issue"."closed" ISNULL;
-      -- the mail queue of member_sync.sql, if applied
-      IF to_regclass('member_sync_mail') NOTNULL THEN
-        DELETE FROM "member_sync_mail";
-      END IF;
-      RETURN;
-    END;
-  $$;
 
 COMMIT;
