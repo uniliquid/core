@@ -422,13 +422,12 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
           AND "unwanted"."keep"
           RETURNING "privilege"."member_id"
         )
-        SELECT count(*),
+        SELECT (SELECT count(*) FROM "deleted") + (SELECT count(*) FROM "cleared"),
           "changes_v" || ARRAY(SELECT 'member ' || "member_id" || CASE WHEN "removals_p"
             THEN ': privileges -' ELSE ': would revoke privileges -' END || count(*)
             FROM (SELECT * FROM "deleted" UNION ALL SELECT * FROM "cleared") AS "revoked"
             GROUP BY "member_id" ORDER BY "member_id")
-          INTO "privileges_revoked", "changes_v"
-          FROM (SELECT * FROM "deleted" UNION ALL SELECT * FROM "cleared") AS "revoked";
+          INTO "privileges_revoked", "changes_v";
         -- Departed (not listed, not admin): deleted when nothing that matters
         -- references the row (ON DELETE CASCADE would silently drop initiators,
         -- incoming delegations, interest, support, opinions and issue

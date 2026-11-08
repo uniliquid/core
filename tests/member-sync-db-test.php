@@ -508,13 +508,14 @@ foreach (['admin_manager', 'area_manager', 'member_manager'] as $unit => $flag) 
 $owner->exec("INSERT INTO privilege (unit_id, member_id) VALUES (5, $id), (12, $id)");
 $result = sync($db, [entry(1, true, 38)]);
 check('flags: counts', $result === counts(['privileges_granted' => 2, 'privileges_revoked' => 6]));
+check('flags: change lines (rows deleted and cleared: one line)', $GLOBALS['changes'] === ["member $id: privileges +2", "member $id: privileges -6"]);
 check('flags: voting_right/initiative_right false on a wanted unit -> true', units($owner, $id) === [1, 6, 12]);
 check('flags: manager and polling rows kept with the owned flags cleared, a plain row deleted, unmanaged unit kept',
     privileges($owner, $id) === ['1:11', '3:00', '4:00', '6:11', '7:00', '8:00', '9:00', '12:11']);
 $flags = row($owner, "SELECT unit_manager, polling_right FROM privilege p WHERE member_id = $id AND unit_id = 3");
 check('flags: manager flags themselves unchanged', $flags['unit_manager'] === true
     && row($owner, "SELECT polling_right FROM privilege WHERE member_id = $id AND unit_id = 4")['polling_right'] === true);
-check('flags: second run, no changes', sync($db, [entry(1, true, 38)]) === counts());
+check('flags: second run, no changes', sync($db, [entry(1, true, 38)]) === counts() && $GLOBALS['changes'] === []);
 check('flags: lock keeps the manager rows, clears the flags', sync($db, [entry(1, false, 38)]) === counts(['locked' => 1, 'privileges_revoked' => 2])
     && privileges($owner, $id) === ['3:00', '4:00', '7:00', '8:00', '9:00', '12:11']);
 

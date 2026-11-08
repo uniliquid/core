@@ -18,10 +18,12 @@ function worker($scenario)
 // --- Flow --------------------------------------------------------------------
 
 [$status, $lines, $stderr] = worker('ok');
-check('send OK: invite, locked and unlocked mails, texts from the core files', $lines === [
+check('send OK: invite, locked and unlocked mails, texts from the core files, #{base_url} replaced (one slash), none left', $lines === [
     'mail m1@example.org|Invitation|Invite code',
     'mail m2@example.org|[Liquid] Sperrung des Accounts|Hallo,',
-    'mail m3@example.org|[Liquid] Freischaltung des Accounts|Hallo',
+    'mail m3@example.org|[Liquid] Freischaltung des Accounts|Hallo,',
+    '  link Anmelden kannst du dich hier: https://liquid.example.org/a%1b/',
+    '  link Falls du dein Passwort nicht mehr weißt, kannst du hier ein neues anfordern: https://liquid.example.org/a%1b/index/reset_password.html',
     '3 sent, 0 failed',
     'code 1 NEW',
     'exit 0',
@@ -31,7 +33,9 @@ check('send OK: exit 0, queue empty, nothing on stderr', $status === 0 && $stder
 [$status, $lines] = worker('fail');
 check('send failing: rows stay queued, the saved invite code rolled back, exit 1', $status === 1 && $lines === [
     'mail fail1@example.org|Invitation|Invite code',
-    'mail fail2@example.org|[Liquid] Freischaltung des Accounts|Hallo',
+    'mail fail2@example.org|[Liquid] Freischaltung des Accounts|Hallo,',
+    '  link Anmelden kannst du dich hier: https://liquid.example.org/a%1b/',
+    '  link Falls du dein Passwort nicht mehr weißt, kannst du hier ein neues anfordern: https://liquid.example.org/a%1b/index/reset_password.html',
     'mail m3@example.org|[Liquid] Sperrung des Accounts|Hallo,',
     '1 sent, 2 failed',
     'queue 1 invite t1',

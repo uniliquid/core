@@ -191,7 +191,9 @@ with LF_CORE_DIR the directory of lf_member_sync_mail. One pass: each
 queue row in its own transaction, with the member and queue rows locked
 (a sync run waits for it): a row that no longer fits (not in the view
 member_sync_mail_due) is deleted unsent; a due one is sent, the invitation with the frontend's Member:send_invitation(),
-"locked" and "unlocked" with the texts above through net.send_mail and the
+"locked" and "unlocked" with the texts above (each #{base_url} in them
+replaced by the frontend's config.absolute_base_url, with one final
+slash) through net.send_mail and the
 frontend's mail settings; a row is deleted after a successful send only. Prints "<n> sent, <n> failed";
 exit status 1 if any send failed (the row stays queued) or on any error.
 It needs sendmail as the frontend's notification mails do.
