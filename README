@@ -120,8 +120,8 @@ never touched):
 Everything in one transaction; a second identical run changes nothing.
 Removals (locking with its sessions and "locked" mail, deactivating,
 removing rights, deleting and anonymising) only with 'removals' => 'on'
-in the secrets file; with 'off' (the default) a run does the additions only (new
-accounts, unlocks, emails, rights, invitation and "unlocked" mails) and
+in the secrets file; with 'off' (the default) a run does the additions
+only (new accounts, unlocks, emails, rights, invitation and "unlocked" mails) and
 reports the removals it would have done. The deployment manages the
 setting (default off); take a database dump right before switching it on.
 Plain LiquidFeedback behaviour that follows: a voting right revoked (or a
@@ -231,8 +231,9 @@ For --expect, an independent upper bound (equal only if every such
 member is listed), as the owner of the tables:
   SELECT count(*) FROM member WHERE identification ~ '^[A-Za-z0-9+/]{43}=$'
     AND admin_comment IS DISTINCT FROM 'Austritt';
-the dry run reports how many rows match; find out why any are missing
-before going on.
+the migration refuses unless exactly <n> rows match, so a dry run with
+this bound may report "<m> rows match, expected <n>": find out which
+listed rows are missing, then use the checked <m>.
 As the owner of the tables (e.g. lqfb), with a copy of the secrets file
 and a file with the old key (a final line break is ignored), both
 readable by that user only and deleted afterwards:
