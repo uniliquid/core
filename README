@@ -289,8 +289,12 @@ member sync) prepends a line per unit to
 /opt/liquid_feedback_statistics/<unit>.html (LF_STATISTICS_DIR) when it
 changed: the members with the voting right in the unit who are not locked,
 the active ones among them and the quorum ceil(n^0.6); "error3! 0" and no
-change if unit 1 has none. The frontend's static/hourly.php shows these
-files; a wiki bot fetches the quorum from /static/hourly.php, so the
-deployment must keep serving that URL (with PHP) and the directory.
+change if unit 1 has none. Nothing is written to a missing or empty file:
+each unit's file is created once with a first line. The files are the
+whole history (newest line first) and any web server or renderer can
+display them; the frontend's static/hourly.php is one (with PHP). A wiki
+bot fetches the quorum from /static/hourly.php, so a deployment that
+renders the files differently should keep that URL working (e.g. a
+redirect to its page).
 
 Tests (Docker): tests/run.sh
