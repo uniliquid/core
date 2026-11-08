@@ -139,10 +139,6 @@ CREATE OR REPLACE VIEW public.member_sync_mail_due AS
 
 COMMENT ON VIEW public.member_sync_mail_due IS 'Queued mails to send: owned rows with an address whose state still fits the kind (invite: never activated and not locked; locked: locked; unlocked: not locked)';
 
--- Earlier versions: member_sync(JSONB), the view member_sync_mail_stale.
-DROP FUNCTION IF EXISTS public.member_sync(JSONB);
-DROP VIEW IF EXISTS public.member_sync_mail_stale;
-
 CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BOOLEAN)
   RETURNS TABLE (
     "created"            INT4,
@@ -285,11 +281,15 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
         FROM jsonb_to_recordset("members_p") AS "entry" ("identification" TEXT, "eligible" BOOLEAN, "email" TEXT)
         WHERE "entry"."eligible" AND "entry"."email" ISNULL
         AND NOT EXISTS (SELECT NULL FROM public.member WHERE "identification" = "entry"."identification");
-      -- Eligible and locked: unlock; the "unlocked" mail for activated
-      -- members (active or not), the invite again for never activated ones
-      -- without a code.
+      -- Eligible and locked: unlock, clearing an expired password reset
+      -- (the frontend refuses a new one while any secret is set); the
+      -- "unlocked" mail for activated members (active or not), the invite
+      -- again for never activated ones without a code.
       WITH "unlocked" AS (
-        UPDATE public.member SET "locked" = FALSE
+        UPDATE public.member SET
+          "locked" = FALSE,
+          "password_reset_secret"        = CASE WHEN "password_reset_secret_expiry" > now() THEN "password_reset_secret" END,
+          "password_reset_secret_expiry" = CASE WHEN "password_reset_secret_expiry" > now() THEN "password_reset_secret_expiry" END
         WHERE public.member_sync_owned("identification")
         AND "identification" = ANY ("eligible_v")
         AND "locked"
@@ -367,10 +367,12 @@ CREATE OR REPLACE FUNCTION public.member_sync("members_p" JSONB, "removals_p" BO
       -- the block at the end (the variables keep the counts), so nothing is
       -- locked, revoked, deleted or anonymised and no "locked" mail queued.
       BEGIN
-        -- Listed and not eligible, or a departed admin: locked, reconciled on
-        -- every run; the "locked" mail on the transition only.
+        -- Listed and not eligible, or a departed admin: locked and, on the
+        -- transition, deactivated (LQFB counts "active" members, not
+        -- unlocked ones; a login activates again) with the "locked" mail;
+        -- sessions and rights below are reconciled on every run.
         WITH "locked" AS (
-          UPDATE public.member SET "locked" = TRUE
+          UPDATE public.member SET "locked" = TRUE, "active" = FALSE
           WHERE public.member_sync_owned("identification")
           AND NOT "identification" = ANY ("eligible_v")
           AND ("identification" = ANY ("listed_v") OR "admin")
