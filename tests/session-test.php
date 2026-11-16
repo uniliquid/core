@@ -35,9 +35,14 @@ function session_count($pdo, $where = 'TRUE')
 $db = database();
 [$status, , $stderr] = apply_session($db);
 check('apply: the deployment command line succeeds', $status === 0 && $stderr === '');
+$owner = connect($db);
+$triggerOid = $owner->query("SELECT oid FROM pg_trigger WHERE tgname = 'session_delete_on_member_lock'")->fetchColumn();
+unset($owner);
 [$status, , $stderr] = apply_session($db);
 check('apply: a second apply succeeds (idempotent)', $status === 0 && $stderr === '');
 $owner = connect($db);
+check('apply: the second apply leaves the trigger as it is (not re-created)',
+    $owner->query("SELECT oid FROM pg_trigger WHERE tgname = 'session_delete_on_member_lock'")->fetchColumn() === $triggerOid);
 check('apply: one column logged_in_at (timestamptz, nullable)', $owner->query("SELECT count(*) = 1 AND bool_and(data_type = 'timestamp with time zone')
     AND bool_and(is_nullable = 'YES') FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'session' AND column_name = 'logged_in_at'")->fetchColumn());
@@ -78,6 +83,41 @@ $owner->rollBack();
 check('lock: a rolled back lock keeps the sessions', session_count($owner, "member_id = $b") === 1);
 unset($owner);
 
+// Negative control: the same lock without the trigger keeps the sessions
+// (so the checks above test the trigger, not something else).
+$db = session_database();
+$owner = connect($db);
+$owner->exec('DROP TRIGGER session_delete_on_member_lock ON member');
+$a = active_member($owner, 'test-member-1');
+$owner->exec("INSERT INTO session (ident, member_id, logged_in_at) VALUES ('a1', $a, now())");
+$owner->exec("UPDATE member SET locked = TRUE WHERE id = $a");
+check('lock without the trigger (control): the sessions stay', session_count($owner, "member_id = $a") === 1);
+unset($owner);
+
+// A role that may lock members but not delete sessions: the trigger runs
+// with the owner's rights (SECURITY DEFINER).
+$db = session_database();
+$admin = connect('postgres', 'postgres');
+if (!$admin->query("SELECT 1 FROM pg_roles WHERE rolname = 'test_locker'")->fetchColumn()) {
+    $admin->exec('CREATE ROLE test_locker LOGIN');
+}
+unset($admin);
+$owner = connect($db);
+$owner->exec('GRANT SELECT, UPDATE ON member TO test_locker');
+$a = active_member($owner, 'test-member-1');
+$owner->exec("INSERT INTO session (ident, member_id, logged_in_at) VALUES ('a1', $a, now())");
+$locker = connect($db, 'test_locker');
+$denied = false;
+try {
+    $locker->exec('DELETE FROM session');
+} catch (PDOException $e) {
+    $denied = true;
+}
+$locker->exec("UPDATE member SET locked = TRUE WHERE id = $a");
+check('lock by a role without DELETE on session: the sessions are gone (SECURITY DEFINER)',
+    $denied && session_count($owner, "member_id = $a") === 0);
+unset($owner, $locker);
+
 // --- Expired sessions (lf_update) --------------------------------------------
 
 $db = session_database();
@@ -95,6 +135,8 @@ check('expired_session: expired rows deleted (with and without logged_in_at), li
 unset($owner);
 
 // --- delete_member(), delete_private_data() ----------------------------------
+// Regression only: both delete sessions themselves; they must still run
+// with the column and the trigger in place.
 
 $db = session_database();
 $owner = connect($db);
@@ -109,6 +151,8 @@ check('delete_private_data(): runs, all sessions gone', session_count($owner) ==
 unset($owner);
 
 // --- Member sync with the trigger present -------------------------------------
+// Regression only: the sync deletes the sessions of members it locks
+// itself; it must still succeed with the trigger in place.
 
 $db = session_database(synced_database());
 $owner = connect($db);

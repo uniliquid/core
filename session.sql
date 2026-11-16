@@ -30,6 +30,9 @@ CREATE INDEX IF NOT EXISTS "session_member_id_idx"
 CREATE OR REPLACE FUNCTION public.session_delete_on_member_lock_trigger()
   RETURNS TRIGGER
   LANGUAGE plpgsql VOLATILE
+  -- With the owner's rights: a role that may lock members but not delete
+  -- sessions still logs them out.
+  SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
     BEGIN
@@ -41,11 +44,22 @@ CREATE OR REPLACE FUNCTION public.session_delete_on_member_lock_trigger()
 COMMENT ON FUNCTION public.session_delete_on_member_lock_trigger() IS
   'Implementation of trigger "session_delete_on_member_lock" on table "member"';
 
-DROP TRIGGER IF EXISTS "session_delete_on_member_lock" ON public.member;
-CREATE TRIGGER "session_delete_on_member_lock"
-  AFTER UPDATE OF "locked" ON public.member FOR EACH ROW
-  WHEN (NEW."locked" AND NOT OLD."locked")
-  EXECUTE PROCEDURE public.session_delete_on_member_lock_trigger();
+-- Created only when missing: no DROP/CREATE (and its lock on "member")
+-- on every apply.
+DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT NULL FROM pg_catalog.pg_trigger
+      WHERE "tgrelid" = 'public.member'::regclass
+      AND "tgname" = 'session_delete_on_member_lock'
+    ) THEN
+      CREATE TRIGGER "session_delete_on_member_lock"
+        AFTER UPDATE OF "locked" ON public.member FOR EACH ROW
+        WHEN (NEW."locked" AND NOT OLD."locked")
+        EXECUTE PROCEDURE public.session_delete_on_member_lock_trigger();
+    END IF;
+  END;
+$$;
 
 COMMENT ON TRIGGER "session_delete_on_member_lock" ON public.member IS
   'A member that becomes locked loses all sessions (logged out everywhere)';
