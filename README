@@ -297,4 +297,39 @@ bot fetches the quorum from /static/hourly.php, so a deployment that
 renders the files differently should keep that URL working (e.g. a
 redirect to its page).
 
+Session additions (login session hardening)
+===========================================
+
+session.sql is the database side of the frontend's login session handling
+(new session on login, sliding expiry with a hard cap, logout and password
+change end sessions). It adds, on top of core.sql:
+- session.logged_in_at: time of the login that created the row; NULL for
+  anonymous sessions and for sessions created before session.sql. The
+  frontend never extends "expiry" beyond logged_in_at plus its maximum
+  lifetime, and does not extend rows without logged_in_at at all.
+- session_member_id_idx: partial index on session.member_id.
+- Trigger session_delete_on_member_lock on member: a member that becomes
+  locked (admin UI, member sync, delete_member(), manual SQL) loses all its
+  sessions.
+
+Idempotent, one transaction, PostgreSQL 9.6 or newer. On every deployment,
+as the owner of the LiquidFeedback tables, BEFORE a frontend that uses the
+column (that frontend fails on every page without it):
+$ psql -X -v ON_ERROR_STOP=1 -f session.sql liquid_feedback
+
+Once, after the first apply: sessions of members locked before the trigger
+existed,
+  DELETE FROM session USING member
+    WHERE session.member_id = member.id AND member.locked;
+
+The anonymous session's default expiry (24 hours) is unchanged.
+expired_session and lf_update work as before.
+
+Rollback (only after the frontend is rolled back; also remove the apply
+step from the deployment, or the next run adds everything again):
+  DROP TRIGGER session_delete_on_member_lock ON member;
+  DROP FUNCTION session_delete_on_member_lock_trigger();
+  DROP INDEX session_member_id_idx;
+  ALTER TABLE session DROP COLUMN logged_in_at;
+
 Tests (Docker): tests/run.sh
