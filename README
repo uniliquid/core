@@ -309,8 +309,11 @@ change end sessions). It adds, on top of core.sql:
   lifetime, and does not extend rows without logged_in_at at all.
 - session_member_id_idx: partial index on session.member_id.
 - Trigger session_delete_on_member_lock on member: a member that becomes
-  locked (admin UI, member sync, delete_member(), manual SQL) loses all its
-  sessions.
+  locked loses all its sessions. delete_member() and the member sync
+  already delete the sessions of members they lock; the trigger covers
+  the other ways (the frontend's admin UI, manual SQL). The trigger
+  function runs with the owner's rights (SECURITY DEFINER, fixed
+  search_path). An existing trigger is left as it is (not re-created).
 
 Idempotent, one transaction, PostgreSQL 9.6 or newer. On every deployment,
 as the owner of the LiquidFeedback tables, BEFORE a frontend that uses the
@@ -327,9 +330,11 @@ expired_session and lf_update work as before.
 
 Rollback (only after the frontend is rolled back; also remove the apply
 step from the deployment, or the next run adds everything again):
-  DROP TRIGGER session_delete_on_member_lock ON member;
-  DROP FUNCTION session_delete_on_member_lock_trigger();
-  DROP INDEX session_member_id_idx;
-  ALTER TABLE session DROP COLUMN logged_in_at;
+  BEGIN;
+  DROP TRIGGER IF EXISTS session_delete_on_member_lock ON member;
+  DROP FUNCTION IF EXISTS session_delete_on_member_lock_trigger();
+  DROP INDEX IF EXISTS session_member_id_idx;
+  ALTER TABLE session DROP COLUMN IF EXISTS logged_in_at;
+  COMMIT;
 
 Tests (Docker): tests/run.sh
