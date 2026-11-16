@@ -36,6 +36,11 @@ CREATE OR REPLACE FUNCTION public.session_delete_on_member_lock_trigger()
   SET search_path = pg_catalog, public, pg_temp
   AS $$
     BEGIN
+      -- Only as the trigger on public.member (with the owner's rights it
+      -- must not run for another table).
+      IF TG_TABLE_SCHEMA IS DISTINCT FROM 'public' OR TG_TABLE_NAME IS DISTINCT FROM 'member' THEN
+        RAISE EXCEPTION 'session_delete_on_member_lock_trigger() is only for table public.member';
+      END IF;
       DELETE FROM public.session WHERE "member_id" = NEW."id";
       RETURN NULL;
     END;
@@ -43,6 +48,10 @@ CREATE OR REPLACE FUNCTION public.session_delete_on_member_lock_trigger()
 
 COMMENT ON FUNCTION public.session_delete_on_member_lock_trigger() IS
   'Implementation of trigger "session_delete_on_member_lock" on table "member"';
+
+-- No other role may attach it as a trigger (CREATE TRIGGER needs EXECUTE;
+-- firing the existing trigger does not).
+REVOKE ALL ON FUNCTION public.session_delete_on_member_lock_trigger() FROM PUBLIC;
 
 -- Created only when missing: no DROP/CREATE (and its lock on "member")
 -- on every apply.
