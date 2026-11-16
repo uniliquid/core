@@ -118,6 +118,40 @@ check('lock by a role without DELETE on session: the sessions are gone (SECURITY
     $denied && session_count($owner, "member_id = $a") === 0);
 unset($owner, $locker);
 
+// The function cannot be used by another role on its own table: no
+// EXECUTE for PUBLIC (CREATE TRIGGER refused), and the guard refuses any
+// table but public.member even for the owner.
+$db = session_database();
+$owner = connect($db);
+$a = active_member($owner, 'test-member-1');
+$owner->exec("INSERT INTO session (ident, member_id, logged_in_at) VALUES ('a1', $a, now())");
+check('grant: no EXECUTE for PUBLIC on the trigger function', $owner->query("SELECT NOT has_function_privilege('test_locker',
+    'public.session_delete_on_member_lock_trigger()', 'EXECUTE')")->fetchColumn());
+$locker = connect($db, 'test_locker');
+$refused = false;
+try {
+    $locker->exec("CREATE TEMPORARY TABLE t (id int, locked boolean)");
+    $locker->exec("CREATE TRIGGER t_lock AFTER UPDATE ON t FOR EACH ROW EXECUTE PROCEDURE public.session_delete_on_member_lock_trigger()");
+} catch (PDOException $e) {
+    $refused = $e->getCode() === '42501';
+}
+check('grant: another role cannot attach the function to its own table', $refused);
+unset($locker);
+$owner->exec("CREATE TABLE public.other (id int, locked boolean)");
+$owner->exec("CREATE TRIGGER other_lock AFTER UPDATE ON public.other FOR EACH ROW EXECUTE PROCEDURE public.session_delete_on_member_lock_trigger()");
+$owner->exec("INSERT INTO public.other VALUES ($a, false)");
+$guarded = false;
+try {
+    $owner->exec("UPDATE public.other SET locked = true");
+} catch (PDOException $e) {
+    $guarded = str_contains($e->getMessage(), 'only for table public.member');
+}
+check('guard: on another table the function raises, sessions kept', $guarded && session_count($owner, "member_id = $a") === 1);
+[$status] = apply_session($db);
+check('grant: a re-apply keeps PUBLIC without EXECUTE', $status === 0 && $owner->query("SELECT NOT has_function_privilege('test_locker',
+    'public.session_delete_on_member_lock_trigger()', 'EXECUTE')")->fetchColumn());
+unset($owner);
+
 // --- Expired sessions (lf_update) --------------------------------------------
 
 $db = session_database();
